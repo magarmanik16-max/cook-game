@@ -1,0 +1,6 @@
+{
+  "name": "Copper Pan",
+  "description": "Fast-paced artisanal bistro cooking game — chop fresh produce, sear in copper skillets, plate dishes, and ring the service bell.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
