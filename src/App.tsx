@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { BistroShopModal } from './components/BistroShopModal';
+import { BistroShopModal, type ShopTab } from './components/BistroShopModal';
 import { GameHud, type HudState } from './components/GameHud';
 import { GameModals } from './components/GameModals';
 import { MobileControls } from './components/MobileControls';
@@ -26,6 +26,7 @@ import type {
   GamePhase,
   KitchenSimulation,
   KitchenThemeId,
+  MatchDurationSeconds,
   PersistentProgress,
   RunStatsSnapshot,
   UpgradeKey,
@@ -46,15 +47,15 @@ function extractHudState(sim: KitchenSimulation): HudState {
   }
 
   return {
-    day: sim.day,
+    durationSeconds: sim.durationSeconds,
+    timeRemaining: sim.timeRemaining,
     score: sim.score,
     coinsEarned: sim.coinsEarned,
     combo: sim.combo,
     ordersServed: sim.ordersServed,
-    targetOrders: sim.targetOrders,
+    botOrdersServed: sim.bot?.ordersServed ?? 0,
+    botScore: sim.bot?.score ?? 0,
     mode: sim.mode,
-    stars: sim.stars,
-    maxStars: sim.maxStars,
     wave: sim.wave,
     tickets: sim.tickets.map((t) => ({ ...t })),
     heldDishId,
@@ -70,9 +71,11 @@ export default function App() {
     new URLSearchParams(window.location.search).get('autostart') === '1';
 
   const [progress, setProgress] = useState<PersistentProgress>(() => loadProgress());
-  const [mode, setMode] = useState<GameMode>('shift');
+  const [mode, setMode] = useState<GameMode>('solo');
+  const [durationSeconds, setDurationSeconds] = useState<MatchDurationSeconds>(60);
   const [phase, setPhase] = useState<GamePhase>(initialAutostart ? 'playing' : 'title');
   const [shopOpen, setShopOpen] = useState(false);
+  const [shopTab, setShopTab] = useState<ShopTab>('upgrades');
   const [muted, setMuted] = useState(false);
   const viewport = useViewportProfile();
 
@@ -80,8 +83,9 @@ export default function App() {
   progressRef.current = progress;
 
   const simRef = useRef<KitchenSimulation>(
-    createInitialSimulation('shift', progress.bestScore, {
+    createInitialSimulation('solo', progress.bestScore, {
       day: progress.day,
+      durationSeconds: 60,
       upgrades: progress.upgrades,
     }),
   );
@@ -100,15 +104,16 @@ export default function App() {
 
   const phaseRef = useRef<GamePhase>(phase);
   const modeRef = useRef<GameMode>(mode);
+  const durationRef = useRef<MatchDurationSeconds>(durationSeconds);
   const shopOpenRef = useRef<boolean>(shopOpen);
   const wakeLoopRef = useRef<(() => void) | null>(null);
   phaseRef.current = phase;
   modeRef.current = mode;
+  durationRef.current = durationSeconds;
   shopOpenRef.current = shopOpen;
 
-  // Unified input state (keyboard + mobile analog joystick + edge-triggered actions)
+  // Unified input state (keyboard fallback + edge-triggered actions)
   const keysHeldRef = useRef<Set<string>>(new Set());
-  const stickMoveRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const justInteractRef = useRef(false);
   const justDashRef = useRef(false);
 
@@ -124,19 +129,23 @@ export default function App() {
 
   const clearInputs = useCallback(() => {
     keysHeldRef.current.clear();
-    stickMoveRef.current = { x: 0, y: 0 };
     justInteractRef.current = false;
     justDashRef.current = false;
   }, []);
 
   const startFreshRun = useCallback(
-    (selectedMode: GameMode, progOverride?: PersistentProgress) => {
+    (
+      selectedMode: GameMode,
+      selectedDuration: MatchDurationSeconds = durationRef.current,
+      progOverride?: PersistentProgress,
+    ) => {
       const p = progOverride ?? progressRef.current;
       kitchenAudio.unlock();
       kitchenAudio.setSizzling(false);
       clearInputs();
       const fresh = createInitialSimulation(selectedMode, p.bestScore, {
         day: p.day,
+        durationSeconds: selectedDuration,
         upgrades: p.upgrades,
       });
       simRef.current = fresh;
@@ -160,7 +169,7 @@ export default function App() {
   );
 
   const handleStartFromTitle = useCallback(() => {
-    startFreshRun(modeRef.current);
+    startFreshRun(modeRef.current, durationRef.current);
   }, [startFreshRun]);
 
   const handlePause = useCallback(() => {
@@ -184,13 +193,7 @@ export default function App() {
   }, [clearInputs, syncBodyState]);
 
   const handleRestart = useCallback(() => {
-    startFreshRun(modeRef.current);
-  }, [startFreshRun]);
-
-  const handleNextDay = useCallback(() => {
-    setMode('shift');
-    modeRef.current = 'shift';
-    startFreshRun('shift', progressRef.current);
+    startFreshRun(modeRef.current, durationRef.current);
   }, [startFreshRun]);
 
   const handleReturnTitle = useCallback(() => {
@@ -199,6 +202,7 @@ export default function App() {
     const p = progressRef.current;
     const fresh = createInitialSimulation(modeRef.current, p.bestScore, {
       day: p.day,
+      durationSeconds: durationRef.current,
       upgrades: p.upgrades,
     });
     simRef.current = fresh;
@@ -218,12 +222,16 @@ export default function App() {
     setMuted(nextMuted);
   }, []);
 
-  const handleOpenShop = useCallback(() => {
-    kitchenAudio.unlock();
-    kitchenAudio.setSizzling(false);
-    clearInputs();
-    setShopOpen(true);
-  }, [clearInputs]);
+  const handleOpenShop = useCallback(
+    (tab?: ShopTab) => {
+      kitchenAudio.unlock();
+      kitchenAudio.setSizzling(false);
+      clearInputs();
+      setShopTab(typeof tab === 'string' ? tab : 'upgrades');
+      setShopOpen(true);
+    },
+    [clearInputs],
+  );
 
   const handleCloseShop = useCallback(() => {
     setShopOpen(false);
@@ -250,16 +258,6 @@ export default function App() {
     rendererRef.current.setTheme(next.selectedTheme);
     kitchenAudio.play('upgrade');
     wakeLoopRef.current?.();
-  }, []);
-
-  const handleStickMove = useCallback((x: number, y: number) => {
-    stickMoveRef.current = { x, y };
-  }, []);
-
-  const handleMobileInteract = useCallback(() => {
-    if (phaseRef.current !== 'playing') return;
-    kitchenAudio.unlock();
-    justInteractRef.current = true;
   }, []);
 
   const handleMobileDash = useCallback(() => {
@@ -428,8 +426,8 @@ export default function App() {
           (held.has('KeyS') || held.has('ArrowDown') ? 1 : 0) -
           (held.has('KeyW') || held.has('ArrowUp') ? 1 : 0);
 
-        let moveX = keyX + stickMoveRef.current.x;
-        let moveY = keyY + stickMoveRef.current.y;
+        let moveX = keyX;
+        let moveY = keyY;
         const mag = Math.hypot(moveX, moveY);
         if (mag > 1) {
           moveX /= mag;
@@ -476,7 +474,7 @@ export default function App() {
             ordersServed: sim.ordersServed,
             perfectDishes: sim.perfectDishes,
             maxCombo: sim.maxCombo,
-            isVictoryShift: sim.outcome === 'victory' && sim.mode === 'shift',
+            wonChallenge: sim.mode === 'challenge' && sim.outcome === 'victory',
           });
           saveProgress(nextProgress);
           progressRef.current = nextProgress;
@@ -504,7 +502,8 @@ export default function App() {
       // Throttled HUD sync (~10Hz or immediately on discrete state changes)
       if (currentPhase === 'playing') {
         hudAccumulator += dt;
-        const sig = `${sim.score}|${sim.coinsEarned}|${sim.ordersServed}|${sim.stars}|${sim.combo}|${sim.tickets.length}|${sim.nearestStationId ?? ''}|${sim.chef.held?.kind ?? ''}|${sim.chef.held?.matchedDishId ?? ''}|${sim.statusBanner ?? ''}`;
+        const secCeil = Math.ceil(sim.timeRemaining);
+        const sig = `${secCeil}|${sim.score}|${sim.coinsEarned}|${sim.ordersServed}|${sim.bot?.ordersServed ?? 0}|${sim.combo}|${sim.tickets.length}|${sim.nearestStationId ?? ''}|${sim.chef.targetTicketId ?? ''}|${sim.chef.held?.kind ?? ''}|${sim.chef.held?.matchedDishId ?? ''}|${sim.statusBanner ?? ''}`;
         if (sig !== lastSignature || hudAccumulator >= 0.14) {
           lastSignature = sig;
           hudAccumulator = 0;
@@ -556,14 +555,42 @@ export default function App() {
       if (!canvas) return;
       kitchenAudio.unlock();
       const rect = canvas.getBoundingClientRect();
-      const stationId = rendererRef.current.hitTestStation(
+      const { stationId, ticketId, walkPoint } = rendererRef.current.hitTestCanvas(
         e.clientX,
         e.clientY,
         rect,
         simRef.current,
       );
-      if (stationId) {
-        simRef.current.chef.targetStationId = stationId;
+      const chef = simRef.current.chef;
+      if (ticketId !== null) {
+        if (chef.targetStationId !== null || (chef.targetTicketId !== null && chef.targetTicketId !== ticketId)) {
+          chef.queuedTicketId = ticketId;
+          chef.queuedStationId = null;
+          chef.targetPoint = null;
+        } else {
+          chef.targetTicketId = ticketId;
+          chef.queuedTicketId = null;
+          chef.queuedStationId = null;
+          chef.targetPoint = null;
+        }
+      } else if (stationId) {
+        if (chef.targetTicketId !== null || (chef.targetStationId && chef.targetStationId !== stationId)) {
+          chef.queuedStationId = stationId;
+          chef.queuedTicketId = null;
+          chef.targetPoint = null;
+        } else {
+          chef.targetStationId = stationId;
+          chef.queuedStationId = null;
+          chef.targetTicketId = null;
+          chef.queuedTicketId = null;
+          chef.targetPoint = null;
+        }
+      } else if (walkPoint) {
+        chef.targetPoint = walkPoint;
+        chef.targetStationId = null;
+        chef.queuedStationId = null;
+        chef.targetTicketId = null;
+        chef.queuedTicketId = null;
       }
     },
     [],
@@ -578,18 +605,22 @@ export default function App() {
         tabIndex={0}
         onPointerDown={handleCanvasPointerDown}
         aria-label="Copper Pan Bistro Kitchen Playfield"
-        className="block w-full h-full outline-none touch-none"
+        className={`block w-full h-full outline-none touch-none ${
+          phase === 'title' ? 'invisible' : ''
+        }`}
       />
 
       {/* Title Screen Stage */}
       {phase === 'title' && (
-        <div className="fixed inset-0 z-20">
+        <div className="fixed inset-0 z-20 isolate">
           <TitleScreen
             mode={mode}
+            durationSeconds={durationSeconds}
             progress={progress}
             isMobile={viewport.isMobile}
             isLandscapeMobile={viewport.isLandscapeMobile}
             onSelectMode={(next) => setMode(next)}
+            onSelectDuration={(sec) => setDurationSeconds(sec)}
             onStart={handleStartFromTitle}
             onOpenShop={handleOpenShop}
           />
@@ -604,29 +635,26 @@ export default function App() {
           isMobile={viewport.isMobile}
           isLandscapeMobile={viewport.isLandscapeMobile}
           onToggleMute={handleToggleMute}
+          onOpenRecipes={() => handleOpenShop('recipes')}
           onPause={handlePause}
           onRestart={handleRestart}
         />
       )}
 
-      {/* Responsive Mobile Touch Deck (visible on portrait & landscape phones during play) */}
+      {/* Left-Side Mobile Dash Trigger (tap kitchen directly to cook & serve) */}
       {phase === 'playing' && !shopOpen && viewport.isMobile && (
         <MobileControls
-          actionLabel={hud.actionHint}
           isLandscapeMobile={viewport.isLandscapeMobile}
-          onStickMove={handleStickMove}
-          onInteract={handleMobileInteract}
           onDash={handleMobileDash}
         />
       )}
 
-      {/* Single Focused Modal for Paused / Victory / Game Over */}
+      {/* Single Focused Modal for Paused / Time's Up / Challenge Results */}
       <GameModals
         phase={phase}
         stats={endStats}
         onResume={handleResume}
         onRestart={handleRestart}
-        onNextDay={handleNextDay}
         onOpenShop={handleOpenShop}
         onReturnTitle={handleReturnTitle}
       />
@@ -634,6 +662,7 @@ export default function App() {
       {/* Persistent Upgrades, Themes & Recipe/Milestone Book */}
       <BistroShopModal
         open={shopOpen}
+        initialTab={shopTab}
         progress={progress}
         onBuyUpgrade={handleBuyUpgrade}
         onSelectTheme={handleSelectTheme}

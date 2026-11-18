@@ -1,26 +1,25 @@
 import React from 'react';
 import { RECIPES } from '../game/recipes';
 import { URGENT_ALARM_SECONDS } from '../game/rules';
-import type { DishId, GameMode, OrderTicket } from '../game/types';
+import type { DishId, GameMode, MatchDurationSeconds, OrderTicket } from '../game/types';
 import {
   CoinSvg,
   IngredientSvg,
   PauseIconSvg,
   RestartIconSvg,
   SoundIconSvg,
-  StarSocketSvg,
 } from './DishIcons';
 
 export interface HudState {
-  day: number;
+  durationSeconds: MatchDurationSeconds;
+  timeRemaining: number;
   score: number;
   coinsEarned: number;
   combo: number;
   ordersServed: number;
-  targetOrders: number;
+  botOrdersServed: number;
+  botScore: number;
   mode: GameMode;
-  stars: number;
-  maxStars: number;
   wave: number;
   tickets: OrderTicket[];
   heldDishId: DishId | null;
@@ -35,20 +34,31 @@ interface GameHudProps {
   isMobile: boolean;
   isLandscapeMobile: boolean;
   onToggleMute: () => void;
+  onOpenRecipes: () => void;
   onPause: () => void;
   onRestart: () => void;
 }
 
-function getPrepVerb(prep: 'ready' | 'chop' | 'sear' | 'chop_sear'): string {
+function formatClock(seconds: number): string {
+  const clamped = Math.max(0, Math.ceil(seconds));
+  const mins = Math.floor(clamped / 60);
+  const secs = clamped % 60;
+  return `${mins}:${secs.toString().padStart(2, '0')}`;
+}
+
+function getPrepBadge(prep: 'ready' | 'chop' | 'sear' | 'chop_sear'): {
+  text: string;
+  cls: string;
+} {
   switch (prep) {
     case 'chop':
-      return 'Chop';
+      return { text: 'Chop', cls: 'bg-[#15803D] text-white' };
     case 'sear':
-      return 'Sear';
+      return { text: 'Sear', cls: 'bg-[#C2410C] text-white' };
     case 'chop_sear':
-      return 'Chop+Fry';
+      return { text: 'Chop+Fry', cls: 'bg-[#B45309] text-white' };
     default:
-      return '';
+      return { text: 'Plate', cls: 'bg-[#EAD8C8] text-[#5C4034]' };
   }
 }
 
@@ -58,10 +68,21 @@ export function GameHud({
   isMobile,
   isLandscapeMobile,
   onToggleMute,
+  onOpenRecipes,
   onPause,
   onRestart,
 }: GameHudProps) {
-  const hasCriticalOrder = hud.tickets.some((t) => t.patience <= URGENT_ALARM_SECONDS);
+  const isFinalCountdown = hud.timeRemaining > 0 && hud.timeRemaining <= 10;
+  const hasCriticalOrder =
+    isFinalCountdown || hud.tickets.some((t) => t.patience <= URGENT_ALARM_SECONDS);
+  const isPortraitMobile = isMobile && !isLandscapeMobile;
+  const isChallenge = hud.mode === 'challenge';
+
+  const priorityTicket =
+    hud.tickets.length > 0
+      ? hud.tickets.reduce((best, cur) => (cur.patience < best.patience ? cur : best), hud.tickets[0])
+      : null;
+  const priorityRecipe = priorityTicket ? RECIPES[priorityTicket.dishId] : null;
 
   return (
     <div
@@ -77,247 +98,315 @@ export function GameHud({
         />
       )}
 
-      {/* Top Perimeter Row: Responsive stack on portrait mobile, split row on landscape/desktop */}
-      <div className="flex flex-col-reverse sm:flex-row sm:items-start justify-between gap-2 sm:gap-3 w-full">
-        {/* Puffy Clay Order Ticket Rail */}
+      {/* Top Perimeter Row: Countdown Timer + Score / VS Bot Ledger + Utility Buttons */}
+      <div className="flex items-center justify-between sm:justify-end gap-1 sm:gap-2.5 w-full">
         <div
-          aria-label="Active customer orders"
-          className="no-scrollbar flex items-start gap-2 overflow-x-auto w-full sm:w-auto sm:max-w-[58vw] pb-0.5 pointer-events-auto"
+          className={`clay-card-sm flex items-center bg-[#FFFBF7] min-w-0 ${
+            isLandscapeMobile
+              ? 'gap-2 px-2.5 py-1'
+              : isMobile
+                ? 'gap-1.5 px-2 py-1'
+                : 'gap-3.5 px-3.5 py-2'
+          }`}
         >
-          {hud.tickets.map((ticket) => {
-            const recipe = RECIPES[ticket.dishId];
-            const ratio = Math.max(0, Math.min(1, ticket.patience / ticket.maxPatience));
-            const secsLeft = Math.max(0, Math.ceil(ticket.patience));
-            const isUrgent = ticket.patience <= URGENT_ALARM_SECONDS;
-            const isMatch = hud.heldDishId === ticket.dishId;
+          {/* Countdown Match Timer */}
+          <div className="flex flex-col items-end">
+            <span className="text-[9px] sm:text-[11px] font-semibold text-[#6E5245] leading-none whitespace-nowrap">
+              Time
+            </span>
+            <span
+              data-testid="hud-timer"
+              className={`font-mono-num font-bold leading-tight tabular-nums mt-0.5 sm:mt-0 inline-flex items-center gap-0.5 ${
+                isFinalCountdown ? 'text-[#C94136] animate-pulse' : 'text-[#3D2921]'
+              } ${isLandscapeMobile ? 'text-sm' : isMobile ? 'text-xs' : 'text-xl'}`}
+            >
+              {formatClock(hud.timeRemaining)}
+            </span>
+          </div>
 
-            const barColor =
-              ratio > 0.55 ? '#22C55E' : !isUrgent ? '#F59E0B' : '#E11D48';
-
-            const ticketSurface = isMatch
-              ? 'bg-[#FFF3CC] -translate-y-0.5 ring-2 ring-[#F59E0B]'
-              : isUrgent
-                ? 'bg-[#FFE0E4] ring-2 ring-[#E11D48] animate-pulse'
-                : ticket.isVip
-                  ? 'bg-[#FFF5D6] ring-1 ring-[#F59E0B]/60'
-                  : 'bg-[#FFFBF7]';
-
-            return (
+          {isChallenge ? (
+            <>
+              {/* Head-to-Head VS Bot Counter */}
               <div
-                key={ticket.id}
-                className={`clay-card-sm shrink-0 ${
-                  isLandscapeMobile
-                    ? 'w-[132px] px-2 py-1 leading-tight'
-                    : 'w-[156px] sm:w-44 px-2.5 sm:px-3 py-1.5 sm:py-2.5'
-                } transition-transform duration-150 ${ticketSurface}`}
-              >
-                <div className="flex items-center justify-between gap-1.5">
-                  <span className="text-[10px] sm:text-[11px] font-bold text-[#6E5245] tracking-wide whitespace-nowrap truncate">
-                    Table {ticket.tableNumber}
-                    {ticket.isVip ? ' · VIP' : ticket.isDailySpecial ? ' · Special' : ''}
-                  </span>
-                  <span
-                    className={`font-mono-num text-[11px] sm:text-xs font-bold tabular-nums shrink-0 ${
-                      isUrgent ? 'text-[#BE123C]' : 'text-[#3D2921]'
-                    }`}
-                  >
-                    {isUrgent ? `${secsLeft}s!` : `${secsLeft}s`}
-                  </span>
-                </div>
-
-                <div
-                  className={`font-display font-bold text-[#3D2921] truncate ${
-                    isLandscapeMobile ? 'text-[11px] mt-0' : 'text-xs sm:text-sm mt-0.5'
-                  }`}
-                >
-                  {recipe.shortName}
-                </div>
-
-                {/* Recipe Step Icons */}
-                <div className="flex items-center gap-1.5 mt-0.5 sm:mt-1.5 flex-wrap">
-                  {recipe.steps.map((step, idx) => {
-                    const verb = getPrepVerb(step.prep);
-                    return (
-                      <div
-                        key={`${ticket.id}-${idx}`}
-                        className="inline-flex items-center gap-0.5 text-[10px] font-semibold text-[#5C4034]"
-                        title={step.label}
-                      >
-                        <IngredientSvg base={step.base} className="w-3 h-3 sm:w-3.5 sm:h-3.5 shrink-0" />
-                        {verb && <span className="leading-none">{verb}</span>}
-                      </div>
-                    );
-                  })}
-                </div>
-
-                {/* Soft Clay Patience Progress Bar */}
-                <div className="mt-1 sm:mt-1.5 h-1.5 sm:h-2 w-full rounded-full bg-[#EFE0D2] overflow-hidden p-[1px]">
-                  <div
-                    className="h-full rounded-full transition-[width] duration-150"
-                    style={{
-                      width: `${Math.round(ratio * 100)}%`,
-                      backgroundColor: barColor,
-                    }}
-                  />
-                </div>
-              </div>
-            );
-          })}
-        </div>
-
-        {/* Right Cluster: Clay Kitchen Ledger + Squishy Utility Buttons */}
-        <div className="flex items-center justify-between sm:justify-end gap-1.5 sm:gap-2.5 shrink-0 w-full sm:w-auto">
-          <div
-            className={`clay-card-sm flex items-center bg-[#FFFBF7] ${
-              isLandscapeMobile ? 'gap-2 px-2.5 py-1' : 'gap-2 sm:gap-3.5 px-2.5 sm:px-3.5 py-1.5 sm:py-2'
-            }`}
-          >
-            <div className="flex flex-col items-end">
-              <span className="text-[10px] sm:text-[11px] font-semibold text-[#6E5245] leading-none whitespace-nowrap">
-                Day {hud.day}
-              </span>
-              <span
-                data-testid="hud-score"
-                className={`font-mono-num font-bold text-[#3D2921] leading-tight tabular-nums mt-0.5 sm:mt-0 ${
-                  isLandscapeMobile ? 'text-sm' : 'text-sm sm:text-xl'
+                className={`flex flex-col items-end border-l border-[#EAD8C8] ${
+                  isPortraitMobile ? 'pl-1.5' : 'pl-2 sm:pl-2.5'
                 }`}
               >
-                {Math.round(hud.score)}
-              </span>
-            </div>
+                <span className="text-[9px] sm:text-[11px] font-bold text-[#C94136] leading-none whitespace-nowrap">
+                  You
+                </span>
+                <span
+                  data-testid="hud-orders"
+                  className={`font-mono-num font-bold text-[#3D2921] leading-tight tabular-nums mt-0.5 sm:mt-0 ${
+                    isLandscapeMobile ? 'text-sm' : isMobile ? 'text-xs' : 'text-xl'
+                  }`}
+                >
+                  {hud.ordersServed}
+                </span>
+              </div>
 
+              <div
+                className={`flex flex-col items-end border-l border-[#EAD8C8] ${
+                  isPortraitMobile ? 'pl-1.5' : 'pl-2 sm:pl-2.5'
+                }`}
+              >
+                <span className="text-[9px] sm:text-[11px] font-bold text-[#7E22CE] leading-none whitespace-nowrap">
+                  Coco
+                </span>
+                <span
+                  data-testid="hud-bot-orders"
+                  className={`font-mono-num font-bold text-[#7E22CE] leading-tight tabular-nums mt-0.5 sm:mt-0 ${
+                    isLandscapeMobile ? 'text-sm' : isMobile ? 'text-xs' : 'text-xl'
+                  }`}
+                >
+                  {hud.botOrdersServed}
+                </span>
+              </div>
+
+              <div
+                className={`flex flex-col items-end border-l border-[#EAD8C8] ${
+                  isPortraitMobile ? 'pl-1.5' : 'pl-2 sm:pl-2.5'
+                }`}
+              >
+                <span className="text-[9px] sm:text-[11px] font-semibold text-[#6E5245] leading-none whitespace-nowrap">
+                  Score
+                </span>
+                <span
+                  data-testid="hud-score"
+                  className={`font-mono-num font-bold text-[#3D2921] leading-tight tabular-nums mt-0.5 sm:mt-0 ${
+                    isLandscapeMobile ? 'text-sm' : isMobile ? 'text-xs' : 'text-xl'
+                  }`}
+                >
+                  {Math.round(hud.score)}
+                </span>
+              </div>
+            </>
+          ) : (
+            <>
+              <div
+                className={`flex flex-col items-end border-l border-[#EAD8C8] ${
+                  isPortraitMobile ? 'pl-1.5' : 'pl-2 sm:pl-2.5'
+                }`}
+              >
+                <span className="text-[9px] sm:text-[11px] font-semibold text-[#6E5245] leading-none whitespace-nowrap">
+                  Served
+                </span>
+                <span
+                  data-testid="hud-orders"
+                  className={`font-mono-num font-bold text-[#15803D] leading-tight tabular-nums mt-0.5 sm:mt-0 ${
+                    isLandscapeMobile ? 'text-sm' : isMobile ? 'text-xs' : 'text-xl'
+                  }`}
+                >
+                  {hud.ordersServed}
+                </span>
+              </div>
+
+              <div
+                className={`flex flex-col items-end border-l border-[#EAD8C8] ${
+                  isPortraitMobile ? 'pl-1.5' : 'pl-2 sm:pl-2.5'
+                }`}
+              >
+                <span className="text-[9px] sm:text-[11px] font-semibold text-[#6E5245] leading-none whitespace-nowrap">
+                  Score
+                </span>
+                <span
+                  data-testid="hud-score"
+                  className={`font-mono-num font-bold text-[#3D2921] leading-tight tabular-nums mt-0.5 sm:mt-0 ${
+                    isLandscapeMobile ? 'text-sm' : isMobile ? 'text-xs' : 'text-xl'
+                  }`}
+                >
+                  {Math.round(hud.score)}
+                </span>
+              </div>
+            </>
+          )}
+
+          {!isPortraitMobile && (
             <div className="flex flex-col items-end border-l border-[#EAD8C8] pl-2 sm:pl-2.5">
-              <span className="text-[10px] sm:text-[11px] font-semibold text-[#6E5245] leading-none whitespace-nowrap">
+              <span className="text-[9px] sm:text-[11px] font-semibold text-[#6E5245] leading-none whitespace-nowrap">
                 Coins
               </span>
               <span
-                className={`font-mono-num font-bold text-[#B45309] leading-tight tabular-nums inline-flex items-center gap-1 mt-0.5 sm:mt-0 ${
-                  isLandscapeMobile ? 'text-sm' : 'text-sm sm:text-lg'
+                className={`font-mono-num font-bold text-[#B45309] leading-tight tabular-nums inline-flex items-center gap-0.5 sm:gap-1 mt-0.5 sm:mt-0 ${
+                  isLandscapeMobile ? 'text-sm' : 'text-lg'
                 }`}
               >
                 <CoinSvg className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
                 {hud.coinsEarned}
               </span>
             </div>
+          )}
 
-            {hud.combo >= 2 && (
-              <div className="flex flex-col items-end border-l border-[#EAD8C8] pl-2 sm:pl-2.5">
-                <span className="text-[10px] sm:text-[11px] font-semibold text-[#C94136] leading-none whitespace-nowrap">
-                  Streak
-                </span>
-                <span
-                  className={`font-mono-num font-bold text-[#C94136] leading-tight tabular-nums mt-0.5 sm:mt-0 ${
-                    isLandscapeMobile ? 'text-sm' : 'text-sm sm:text-xl'
-                  }`}
-                >
-                  {hud.combo}x
-                </span>
-              </div>
-            )}
-
-            <div className="flex flex-col items-end border-l border-[#EAD8C8] pl-2 sm:pl-2.5">
-              <span className="text-[10px] sm:text-[11px] font-semibold text-[#6E5245] leading-none whitespace-nowrap">
-                Orders
+          {hud.combo >= 2 && (
+            <div
+              className={`flex flex-col items-end border-l border-[#EAD8C8] ${
+                isPortraitMobile ? 'pl-1.5' : 'pl-2 sm:pl-2.5'
+              }`}
+            >
+              <span className="text-[9px] sm:text-[11px] font-semibold text-[#C94136] leading-none whitespace-nowrap">
+                Streak
               </span>
               <span
-                data-testid="hud-orders"
-                className={`font-mono-num font-bold text-[#3D2921] leading-tight tabular-nums mt-0.5 sm:mt-0 ${
-                  isLandscapeMobile ? 'text-sm' : 'text-sm sm:text-xl'
+                className={`font-mono-num font-bold text-[#C94136] leading-tight tabular-nums mt-0.5 sm:mt-0 ${
+                  isLandscapeMobile ? 'text-sm' : isMobile ? 'text-xs' : 'text-xl'
                 }`}
               >
-                {hud.mode === 'shift'
-                  ? `${hud.ordersServed}/${hud.targetOrders}`
-                  : `${hud.ordersServed}`}
+                {hud.combo}x
               </span>
             </div>
+          )}
+        </div>
 
-            <div
-              className="flex items-center gap-0.5 border-l border-[#EAD8C8] pl-2 sm:pl-2.5 shrink-0"
-              aria-label={`Kitchen stars: ${hud.stars} of ${hud.maxStars}`}
-            >
-              {Array.from({ length: hud.maxStars }, (_, i) => (
-                <StarSocketSvg key={i} filled={i < hud.stars} />
-              ))}
-            </div>
-          </div>
+        {/* Squishy Square-Rounded Clay Utility Buttons */}
+        <div
+          className={`flex items-center pointer-events-auto shrink-0 ${
+            isMobile ? 'gap-1' : 'gap-1.5'
+          }`}
+        >
+          <button
+            type="button"
+            tabIndex={-1}
+            aria-label="Open Recipe Book"
+            title="Recipe Book (pauses timers)"
+            onClick={(e) => {
+              e.currentTarget.blur();
+              onOpenRecipes();
+            }}
+            className={`clay-btn-soft rounded-xl sm:rounded-2xl bg-[#FFF7E6] hover:bg-[#FFEDD0] text-[#3D2921] flex items-center justify-center gap-1.5 font-bold cursor-pointer ${
+              isLandscapeMobile
+                ? 'h-8 px-2.5 text-[11px]'
+                : isMobile
+                  ? 'w-8 h-8'
+                  : 'h-9 px-3 text-xs'
+            }`}
+          >
+            <svg viewBox="0 0 24 24" className="w-4 h-4 text-[#C94136] shrink-0" aria-hidden="true">
+              <rect
+                x="4.5"
+                y="3.5"
+                width="15"
+                height="17"
+                rx="2.5"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.1"
+              />
+              <path
+                d="M8.5 8.5 H15.5 M8.5 12.5 H15.5 M8.5 16.5 H12.5"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+              />
+            </svg>
+            {!isMobile && <span>Recipes</span>}
+          </button>
 
-          {/* Squishy Square-Rounded Clay Utility Buttons */}
-          <div className="flex items-center gap-1.5 pointer-events-auto shrink-0">
-            <button
-              type="button"
-              tabIndex={-1}
-              aria-label={muted ? 'Unmute audio (M)' : 'Mute audio (M)'}
-              title={muted ? 'Unmute (M)' : 'Mute (M)'}
-              onClick={(e) => {
-                e.currentTarget.blur();
-                onToggleMute();
-              }}
-              className={`clay-btn-soft rounded-2xl bg-[#FFFBF7] hover:bg-[#FFF3E8] text-[#3D2921] flex items-center justify-center cursor-pointer ${
-                isLandscapeMobile ? 'w-8 h-8' : 'w-9 h-9'
-              }`}
-            >
-              <SoundIconSvg muted={muted} />
-            </button>
-            <button
-              type="button"
-              tabIndex={-1}
-              aria-label="Pause game (P)"
-              title="Pause (P / Esc)"
-              onClick={(e) => {
-                e.currentTarget.blur();
-                onPause();
-              }}
-              className={`clay-btn-soft rounded-2xl bg-[#FFFBF7] hover:bg-[#FFF3E8] text-[#3D2921] flex items-center justify-center cursor-pointer ${
-                isLandscapeMobile ? 'w-8 h-8' : 'w-9 h-9'
-              }`}
-            >
-              <PauseIconSvg />
-            </button>
-            <button
-              type="button"
-              tabIndex={-1}
-              aria-label="Restart shift (R)"
-              title="Restart (R)"
-              onClick={(e) => {
-                e.currentTarget.blur();
-                onRestart();
-              }}
-              className={`clay-btn-soft rounded-2xl bg-[#FFFBF7] hover:bg-[#FFF3E8] text-[#3D2921] flex items-center justify-center cursor-pointer ${
-                isLandscapeMobile ? 'w-8 h-8' : 'w-9 h-9'
-              }`}
-            >
-              <RestartIconSvg />
-            </button>
-          </div>
+          <button
+            type="button"
+            tabIndex={-1}
+            aria-label={muted ? 'Unmute audio (M)' : 'Mute audio (M)'}
+            title={muted ? 'Unmute (M)' : 'Mute (M)'}
+            onClick={(e) => {
+              e.currentTarget.blur();
+              onToggleMute();
+            }}
+            className={`clay-btn-soft rounded-xl sm:rounded-2xl bg-[#FFFBF7] hover:bg-[#FFF3E8] text-[#3D2921] flex items-center justify-center cursor-pointer ${
+              isMobile ? 'w-8 h-8' : 'w-9 h-9'
+            }`}
+          >
+            <SoundIconSvg muted={muted} />
+          </button>
+          <button
+            type="button"
+            tabIndex={-1}
+            aria-label="Pause game (P)"
+            title="Pause (P / Esc)"
+            onClick={(e) => {
+              e.currentTarget.blur();
+              onPause();
+            }}
+            className={`clay-btn-soft rounded-xl sm:rounded-2xl bg-[#FFFBF7] hover:bg-[#FFF3E8] text-[#3D2921] flex items-center justify-center cursor-pointer ${
+              isMobile ? 'w-8 h-8' : 'w-9 h-9'
+            }`}
+          >
+            <PauseIconSvg />
+          </button>
+          <button
+            type="button"
+            tabIndex={-1}
+            aria-label="Restart match (R)"
+            title="Restart (R)"
+            onClick={(e) => {
+              e.currentTarget.blur();
+              onRestart();
+            }}
+            className={`clay-btn-soft rounded-xl sm:rounded-2xl bg-[#FFFBF7] hover:bg-[#FFF3E8] text-[#3D2921] flex items-center justify-center cursor-pointer ${
+              isMobile ? 'w-8 h-8' : 'w-9 h-9'
+            }`}
+          >
+            <RestartIconSvg />
+          </button>
         </div>
       </div>
 
-      {/* Bottom Contextual Clay Prompt (shifted above touch deck on portrait mobile) */}
+      {/* Bottom Contextual Clay Prompt & Live Visual Recipe Strip */}
       <div
         className={`flex items-center justify-center w-full ${
-          isMobile && !isLandscapeMobile ? 'pb-[118px]' : 'pb-0.5'
+          isPortraitMobile ? 'pb-4 pl-[74px] pr-2' : 'pb-0.5 px-2'
         }`}
       >
         <div
-          className={`clay-card-sm bg-[#FFFBF7] text-[#3D2921] flex items-center gap-2 whitespace-nowrap max-w-[94vw] truncate font-medium ${
-            isLandscapeMobile ? 'px-3 py-1 text-[11px]' : 'px-3.5 sm:px-4 py-1.5 sm:py-2 text-xs sm:text-sm'
+          className={`clay-card-sm bg-[#FFFBF7] text-[#3D2921] flex items-center gap-1.5 whitespace-nowrap max-w-full overflow-hidden font-medium ${
+            isLandscapeMobile ? 'px-3 py-1 text-[11px]' : 'px-3 sm:px-4 py-1.5 sm:py-2 text-xs sm:text-sm'
           }`}
         >
           {hud.statusBanner ? (
-            <span className="font-bold text-[#C94136]">{hud.statusBanner}</span>
-          ) : hud.actionHint ? (
-            <span>
-              {!isMobile && <span className="font-bold text-[#C94136]">[Space] </span>}
-              <span className="font-semibold">{hud.actionHint}</span>
-              {hud.heldLabel ? <span className="text-[#6E5245]"> · Holding: {hud.heldLabel}</span> : null}
+            <span className="font-bold text-[#C94136] truncate">{hud.statusBanner}</span>
+          ) : hud.heldDishId ? (
+            <span className="font-bold text-[#15803D] truncate">
+              {isMobile
+                ? 'Tap the matching customer to serve!'
+                : 'Click the matching customer to serve!'}
             </span>
+          ) : hud.actionHint ? (
+            <span className="truncate">
+              <span className="font-semibold">{hud.actionHint}</span>
+              {hud.heldLabel && !isMobile ? (
+                <span className="text-[#6E5245]"> · {hud.heldLabel}</span>
+              ) : null}
+            </span>
+          ) : priorityRecipe ? (
+            <div className="flex items-center gap-1.5 min-w-0 overflow-hidden">
+              <span className="font-display font-bold text-[#3D2921] shrink-0">
+                {priorityRecipe.shortName}:
+              </span>
+              <div className="flex items-center gap-1 min-w-0 overflow-hidden">
+                {priorityRecipe.steps.map((step, idx) => {
+                  const badge = getPrepBadge(step.prep);
+                  return (
+                    <span
+                      key={`${priorityRecipe.id}-${idx}`}
+                      className="inline-flex items-center gap-1 shrink-0"
+                    >
+                      {idx > 0 && <span className="text-[#9C7F6E] font-bold">+</span>}
+                      <IngredientSvg base={step.base} className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
+                      <span
+                        className={`px-1.5 py-0.5 rounded-md text-[10px] font-bold leading-none ${badge.cls}`}
+                      >
+                        {badge.text}
+                      </span>
+                    </span>
+                  );
+                })}
+              </div>
+            </div>
           ) : (
-            <span className="text-[#6E5245]">
+            <span className="text-[#6E5245] truncate">
               {hud.heldLabel
                 ? `Holding: ${hud.heldLabel}`
                 : isMobile
-                  ? 'Tap any station or drag joystick'
-                  : 'Click any station or use WASD / Arrows'}
+                  ? 'Tap stations to cook · Tap customers to serve'
+                  : 'Click stations to cook · Click customers to serve'}
             </span>
           )}
         </div>

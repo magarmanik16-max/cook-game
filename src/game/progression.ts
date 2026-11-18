@@ -155,14 +155,14 @@ export const ACHIEVEMENTS: AchievementDefinition[] = [
   },
   {
     id: 'day_three',
-    title: 'Bistro Darling',
-    description: 'Reach Day 3 of Bistro Service',
+    title: 'Rival Victor',
+    description: 'Beat Rival Chef Coco in Bot Challenge',
     coinReward: 60,
   },
   {
     id: 'fifty_plates',
     title: 'Beloved Chef',
-    description: 'Serve 50 total dishes across shifts',
+    description: 'Serve 50 total dishes across matches',
     coinReward: 80,
   },
 ];
@@ -171,7 +171,9 @@ export function createDefaultProgress(bestScore = 0): PersistentProgress {
   return {
     coins: 0,
     day: 1,
+    challengeWins: 0,
     bestScore,
+    bestServed: 0,
     totalServed: 0,
     upgrades: {
       speed: 0,
@@ -196,10 +198,18 @@ export function loadProgress(): PersistentProgress {
       return {
         coins: typeof parsed.coins === 'number' ? Math.max(0, Math.floor(parsed.coins)) : def.coins,
         day: typeof parsed.day === 'number' ? Math.max(1, Math.floor(parsed.day)) : def.day,
+        challengeWins:
+          typeof parsed.challengeWins === 'number'
+            ? Math.max(0, Math.floor(parsed.challengeWins))
+            : def.challengeWins,
         bestScore:
           typeof parsed.bestScore === 'number'
             ? Math.max(0, Math.floor(parsed.bestScore))
             : def.bestScore,
+        bestServed:
+          typeof parsed.bestServed === 'number'
+            ? Math.max(0, Math.floor(parsed.bestServed))
+            : def.bestServed,
         totalServed:
           typeof parsed.totalServed === 'number'
             ? Math.max(0, Math.floor(parsed.totalServed))
@@ -330,12 +340,15 @@ export function finalizeShiftProgress(
     ordersServed: number;
     perfectDishes: number;
     maxCombo: number;
-    isVictoryShift: boolean;
+    wonChallenge?: boolean;
   },
 ): { nextProgress: PersistentProgress; newlyUnlocked: AchievementId[] } {
-  const nextDay = summary.isVictoryShift ? progress.day + 1 : progress.day;
+  const nextChallengeWins = summary.wonChallenge
+    ? progress.challengeWins + 1
+    : progress.challengeWins;
   const nextTotalServed = progress.totalServed + summary.ordersServed;
   const nextBestScore = Math.max(progress.bestScore, Math.round(summary.score));
+  const nextBestServed = Math.max(progress.bestServed, Math.round(summary.ordersServed));
 
   const earnedSet = new Set<AchievementId>(progress.unlockedAchievements);
   const newlyUnlocked: AchievementId[] = [];
@@ -352,16 +365,18 @@ export function finalizeShiftProgress(
   checkUnlock('first_serve', nextTotalServed >= 1);
   checkUnlock('perfect_chef', summary.perfectDishes >= 5);
   checkUnlock('combo_five', summary.maxCombo >= 5);
-  checkUnlock('day_three', nextDay >= 3);
+  checkUnlock('day_three', nextChallengeWins >= 1);
   checkUnlock('fifty_plates', nextTotalServed >= 50);
 
   return {
     newlyUnlocked,
     nextProgress: {
       ...progress,
-      day: nextDay,
+      day: progress.day + 1,
+      challengeWins: nextChallengeWins,
       totalServed: nextTotalServed,
       bestScore: nextBestScore,
+      bestServed: nextBestServed,
       coins: progress.coins + Math.round(summary.coinsEarned) + bonusCoins,
       unlockedAchievements: Array.from(earnedSet),
     },

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   ACHIEVEMENTS,
   getUpgradeCost,
@@ -9,24 +9,32 @@ import { RECIPE_LIST } from '../game/recipes';
 import type { KitchenThemeId, PersistentProgress, UpgradeKey } from '../game/types';
 import { CoinSvg, IngredientSvg } from './DishIcons';
 
+export type ShopTab = 'upgrades' | 'themes' | 'recipes';
+
 interface BistroShopModalProps {
   open: boolean;
+  initialTab?: ShopTab;
   progress: PersistentProgress;
   onBuyUpgrade: (key: UpgradeKey) => void;
   onSelectTheme: (themeId: KitchenThemeId) => void;
   onClose: () => void;
 }
 
-type ShopTab = 'upgrades' | 'themes' | 'recipes';
-
 export function BistroShopModal({
   open,
+  initialTab = 'upgrades',
   progress,
   onBuyUpgrade,
   onSelectTheme,
   onClose,
 }: BistroShopModalProps) {
-  const [tab, setTab] = useState<ShopTab>('upgrades');
+  const [tab, setTab] = useState<ShopTab>(initialTab);
+
+  useEffect(() => {
+    if (open) {
+      setTab(initialTab);
+    }
+  }, [open, initialTab]);
 
   if (!open) return null;
 
@@ -248,16 +256,34 @@ export function BistroShopModal({
                         <div className="font-display text-xs sm:text-sm font-bold text-[#3D2921] truncate">
                           {r.name}
                         </div>
-                        <div className="flex items-center gap-1.5 mt-1 flex-wrap">
-                          {r.steps.map((s, idx) => (
-                            <span
-                              key={idx}
-                              className="inline-flex items-center gap-1 text-[11px] font-medium text-[#6E5245]"
-                            >
-                              <IngredientSvg base={s.base} className="w-3.5 h-3.5" />
-                              <span>{s.label}</span>
-                            </span>
-                          ))}
+                        <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+                          {r.steps.map((s, idx) => {
+                            const tagCls =
+                              s.prep === 'chop'
+                                ? 'bg-[#15803D] text-white'
+                                : s.prep === 'sear'
+                                  ? 'bg-[#C2410C] text-white'
+                                  : s.prep === 'chop_sear'
+                                    ? 'bg-[#B45309] text-white'
+                                    : 'bg-[#EAD8C8] text-[#5C4034]';
+                            return (
+                              <span
+                                key={idx}
+                                className="inline-flex items-center gap-1 rounded-lg bg-[#FFF4E8] border border-[#E8D2BE] px-1.5 py-0.5 text-[10px] font-semibold text-[#3D2921]"
+                              >
+                                <IngredientSvg base={s.base} className="w-3.5 h-3.5 shrink-0" />
+                                <span className={`px-1 py-0.5 rounded text-[9px] font-bold leading-none ${tagCls}`}>
+                                  {s.prep === 'chop'
+                                    ? 'CHOP'
+                                    : s.prep === 'sear'
+                                      ? 'SEAR'
+                                      : s.prep === 'chop_sear'
+                                        ? 'CHOP+FRY'
+                                        : 'PLATE'}
+                                </span>
+                              </span>
+                            );
+                          })}
                         </div>
                       </div>
                       <span className="font-mono-num text-xs font-bold text-[#B45309] shrink-0">

@@ -1,8 +1,10 @@
 export type GamePhase = 'title' | 'playing' | 'paused' | 'gameover';
 
-export type GameMode = 'shift' | 'endless';
+export type GameMode = 'solo' | 'challenge';
 
-export type GameOutcome = 'none' | 'victory' | 'defeat';
+export type MatchDurationSeconds = 30 | 60 | 90;
+
+export type GameOutcome = 'none' | 'finished' | 'victory' | 'defeat' | 'draw';
 
 export type KitchenThemeId = 'copper' | 'patisserie' | 'sage' | 'twilight';
 
@@ -20,7 +22,9 @@ export type AchievementId =
 export interface PersistentProgress {
   coins: number;
   day: number;
+  challengeWins: number;
   bestScore: number;
+  bestServed: number;
   totalServed: number;
   upgrades: UpgradeLevels;
   selectedTheme: KitchenThemeId;
@@ -106,8 +110,9 @@ export type StationType =
   | 'board'
   | 'skillet'
   | 'plate_mat'
-  | 'pass'
   | 'compost';
+
+export type CustomerVariety = 'regular' | 'vip' | 'foodie' | 'express';
 
 export interface StationState {
   id: string;
@@ -125,6 +130,7 @@ export interface StationState {
   plateComponents: PlateComponent[];
   matchedDishId: DishId | null;
   pulseTimer: number;
+  claimedBy?: 'player' | 'bot' | null;
 }
 
 export interface OrderTicket {
@@ -132,11 +138,27 @@ export interface OrderTicket {
   dishId: DishId;
   tableNumber: number;
   guestName: string;
+  avatarId: number;
+  seatIndex: number;
+  dialogue: string;
+  variety: CustomerVariety;
   maxPatience: number;
   patience: number;
   createdAtElapsed: number;
   isVip: boolean;
   isDailySpecial: boolean;
+}
+
+export interface CustomerReaction {
+  id: number;
+  avatarId: number;
+  seatIndex: number;
+  guestName: string;
+  variety?: CustomerVariety;
+  kind: 'happy' | 'upset';
+  text: string;
+  timer: number;
+  maxTimer: number;
 }
 
 export interface ChefState {
@@ -155,6 +177,37 @@ export interface ChefState {
   squashY: number;
   happyTimer: number;
   targetStationId: string | null;
+  queuedStationId: string | null;
+  targetTicketId: number | null;
+  queuedTicketId: number | null;
+  targetPoint: { x: number; y: number } | null;
+  navPath: { x: number; y: number }[];
+  navGoalKey: string | null;
+}
+
+export interface BotChefState {
+  name: string;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  facingX: number;
+  facingY: number;
+  held: HeldItem | null;
+  walkDistance: number;
+  squashX: number;
+  squashY: number;
+  happyTimer: number;
+  ordersServed: number;
+  score: number;
+  combo: number;
+  comboTimer: number;
+  focusTicketId: number | null;
+  targetStationId: string | null;
+  targetTicketId: number | null;
+  navPath: { x: number; y: number }[];
+  navGoalKey: string | null;
+  thinkCooldown: number;
 }
 
 export type SoundCue =
@@ -210,14 +263,14 @@ export interface RunStatsSnapshot {
   score: number;
   bestScore: number;
   coinsEarned: number;
-  day: number;
+  durationSeconds: MatchDurationSeconds;
   ordersServed: number;
-  targetOrders: number;
+  botOrdersServed: number;
+  botScore: number;
   perfectDishes: number;
   maxCombo: number;
   elapsedSeconds: number;
   wave: number;
-  starsRemaining: number;
   outcome: GameOutcome;
   mode: GameMode;
   dailySpecialDishId: DishId;
@@ -226,7 +279,8 @@ export interface RunStatsSnapshot {
 
 export interface KitchenSimulation {
   mode: GameMode;
-  day: number;
+  durationSeconds: MatchDurationSeconds;
+  timeRemaining: number;
   dailySpecialDishId: DishId;
   outcome: GameOutcome;
   score: number;
@@ -236,11 +290,8 @@ export interface KitchenSimulation {
   maxCombo: number;
   comboTimer: number;
   ordersServed: number;
-  targetOrders: number;
   perfectDishes: number;
   burntCount: number;
-  stars: number;
-  maxStars: number;
   wave: number;
   elapsedSeconds: number;
   spawnTimer: number;
@@ -250,9 +301,12 @@ export interface KitchenSimulation {
   skilletAlertCooldown: number;
   upgrades: UpgradeLevels;
   chef: ChefState;
+  bot: BotChefState | null;
   stations: StationState[];
   tickets: OrderTicket[];
+  customerReactions: CustomerReaction[];
   nearestStationId: string | null;
   statusBanner: string | null;
   statusBannerTimer: number;
 }
+

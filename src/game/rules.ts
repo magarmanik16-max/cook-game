@@ -1,10 +1,19 @@
+import { createInitialBot, stepBotChef } from './botAi';
+import {
+  clampToWalkablePoint,
+  findShortestPathToAny,
+  getStationCandidateStandPoints,
+  isSegmentClear,
+  KITCHEN_OBSTACLES,
+  NAV_CLEARANCE,
+  type NavPoint,
+} from './pathfinding';
 import {
   getBurnGraceBonus,
   getChopMultiplier,
   getDailySpecialForDay,
   getPatienceMultiplier,
   getSpeedMultiplier,
-  getTargetOrdersForDay,
   getTipMultiplier,
 } from './progression';
 import {
@@ -23,11 +32,13 @@ import {
 import type {
   ChefState,
   CookStage,
+  CustomerVariety,
   DishId,
   GameMode,
   IngredientBase,
   InputSnapshot,
   KitchenSimulation,
+  MatchDurationSeconds,
   OrderTicket,
   RunStatsSnapshot,
   SimEvent,
@@ -38,9 +49,8 @@ import type {
 export const GRID_COLS = 10;
 export const GRID_ROWS = 7;
 
-export const SHIFT_TARGET_ORDERS = 8;
+export const DEFAULT_MATCH_DURATION: MatchDurationSeconds = 60;
 export const MAX_ACTIVE_TICKETS = 4;
-export const MAX_STARS = 3;
 
 export const CHEF_RADIUS = 0.34;
 export const CHEF_SPEED = 4.7;
@@ -72,6 +82,20 @@ const GUEST_NAMES = [
   'Margot',
 ];
 
+const GUEST_DIALOGUES: Record<DishId, string> = {
+  bruschetta: 'Fresh bruschetta!',
+  avo_toast: 'Creamy avo toast!',
+  garden_bowl: 'Crisp salad, please!',
+  morning_brioche: 'Warm egg brioche!',
+  berry_toast: 'Sweet berry toast!',
+  avo_bowl: 'Green goddess bowl!',
+  bistro_burger: 'Smash burger!',
+  steak_hash: 'Steak & frites!',
+  royale_burger: 'Royale burger!',
+};
+
+const HAPPY_QUIPS = ['Merci! ♥', 'Delicious! ♥', 'So cozy! ★', 'Magnifique! ♥'];
+
 const DEFAULT_UPGRADES: UpgradeLevels = {
   speed: 0,
   chop: 0,
@@ -82,6 +106,7 @@ const DEFAULT_UPGRADES: UpgradeLevels = {
 
 export interface SimulationOptions {
   day?: number;
+  durationSeconds?: MatchDurationSeconds;
   upgrades?: UpgradeLevels;
 }
 
@@ -109,14 +134,13 @@ export function createStations(): StationState[] {
     plateComponents: [],
     matchedDishId: null,
     pulseTimer: 0,
+    claimedBy: null,
   });
 
   return [
-    // Top Counter Row (row 0)
+    // Top Counter Row (row 0) — serving happens directly at Customer Counter seats!
     makeStation('board_1', 'board', 'Cutting Board', 2, 0),
     makeStation('board_2', 'board', 'Cutting Board', 3, 0),
-    makeStation('pass_1', 'pass', 'Service Pass', 5, 0),
-    makeStation('pass_2', 'pass', 'Service Pass', 6, 0),
     makeStation('compost', 'compost', 'Compost Bin', 8, 0),
 
     // Left Wall Pantry (col 0)
@@ -139,9 +163,9 @@ export function createStations(): StationState[] {
   ];
 }
 
-export function createInitialChef(): ChefState {
+export function createInitialChef(startX = 4.5): ChefState {
   return {
-    x: 4.5,
+    x: startX,
     y: 2.05,
     vx: 0,
     vy: 0,
@@ -156,6 +180,12 @@ export function createInitialChef(): ChefState {
     squashY: 1,
     happyTimer: 0,
     targetStationId: null,
+    queuedStationId: null,
+    targetTicketId: null,
+    queuedTicketId: null,
+    targetPoint: null,
+    navPath: [],
+    navGoalKey: null,
   };
 }
 
@@ -165,23 +195,39 @@ export function computeWaveForOrders(ordersServed: number, elapsedSeconds: numbe
   return 1;
 }
 
+export function pickCustomerVariety(ticketIndex: number): CustomerVariety {
+  if (ticketIndex >= 3 && ticketIndex % 4 === 0) return 'vip';
+  if (ticketIndex === 2 || ticketIndex % 5 === 2) return 'foodie';
+  if (ticketIndex >= 3 && ticketIndex % 5 === 3) return 'express';
+  return 'regular';
+}
+
 export function computePatienceForWave(
   wave: number,
   dishId: DishId,
   upgrades: UpgradeLevels,
-  isVip: boolean,
+  variety: CustomerVariety | boolean,
 ): number {
   const recipe = RECIPES[dishId];
   const stepBonus = recipe.components.length * 6;
   const base = wave === 1 ? 38 : wave === 2 ? 34 : 30;
-  const raw = (base + stepBonus) * getPatienceMultiplier(upgrades);
-  return isVip ? Math.round(raw * 0.88) : Math.round(raw);
+  const resolved: CustomerVariety =
+    typeof variety === 'boolean' ? (variety ? 'vip' : 'regular') : variety;
+  const varietyMult =
+    resolved === 'vip'
+      ? 0.88
+      : resolved === 'express'
+        ? 0.8
+        : resolved === 'foodie'
+          ? 1.14
+          : 1;
+  const raw = (base + stepBonus) * getPatienceMultiplier(upgrades) * varietyMult;
+  return Math.round(raw);
 }
 
-export function computeSpawnInterval(wave: number): number {
-  if (wave === 1) return 10.2;
-  if (wave === 2) return 8.4;
-  return 6.9;
+export function computeSpawnInterval(wave: number, mode: GameMode = 'solo'): number {
+  const base = wave === 1 ? 8.2 : wave === 2 ? 6.8 : 5.6;
+  return mode === 'challenge' ? base * 0.62 : base;
 }
 
 export function pickRecipeForWave(
@@ -195,7 +241,6 @@ export function pickRecipeForWave(
   for (const t of activeTickets) {
     activeCounts.set(t.dishId, (activeCounts.get(t.dishId) ?? 0) + 1);
   }
-  // Occasionally favor Daily Special if compatible with current wave
   const specialRecipe = RECIPES[dailySpecialDishId];
   if (
     specialRecipe.minWave <= wave &&
@@ -210,19 +255,53 @@ export function pickRecipeForWave(
   return candidates[Math.abs(seedIndex) % candidates.length].id;
 }
 
+function pickFreeSeatIndex(tickets: OrderTicket[]): number {
+  const taken = new Set(tickets.map((t) => t.seatIndex));
+  for (let i = 0; i < MAX_ACTIVE_TICKETS; i++) {
+    if (!taken.has(i)) return i;
+  }
+  return tickets.length % MAX_ACTIVE_TICKETS;
+}
+
+export function getSeatWorldPos(seatIndex: number): { x: number; y: number } {
+  return {
+    x: 1.82 + seatIndex * 1.8,
+    y: GRID_ROWS - 0.45,
+  };
+}
+
+export function getSeatStandPoint(seatIndex: number): { x: number; y: number } {
+  return {
+    x: Math.max(1.4, Math.min(GRID_COLS - 1.4, 1.82 + seatIndex * 1.8)),
+    y: GRID_ROWS - 1.38,
+  };
+}
+
 export function spawnTicket(sim: KitchenSimulation, dishOverride?: DishId): OrderTicket {
   const idx = sim.nextTicketId;
   sim.nextTicketId += 1;
   const dishId =
     dishOverride ??
     pickRecipeForWave(sim.wave, idx * 7 + sim.ordersServed, sim.tickets, sim.dailySpecialDishId);
-  const isVip = idx >= 4 && idx % 4 === 0;
-  const maxPatience = computePatienceForWave(sim.wave, dishId, sim.upgrades, isVip);
+  const variety = pickCustomerVariety(idx);
+  const isVip = variety === 'vip';
+  const maxPatience = computePatienceForWave(sim.wave, dishId, sim.upgrades, variety);
   const ticket: OrderTicket = {
     id: idx,
     dishId,
     tableNumber: ((idx - 1) % 8) + 1,
     guestName: GUEST_NAMES[(idx - 1) % GUEST_NAMES.length],
+    avatarId: (idx - 1) % 6,
+    seatIndex: pickFreeSeatIndex(sim.tickets),
+    dialogue:
+      variety === 'vip'
+        ? 'VIP Order!'
+        : variety === 'foodie'
+          ? 'Extra Tip!'
+          : variety === 'express'
+            ? 'Quick Bite!'
+            : GUEST_DIALOGUES[dishId],
+    variety,
     maxPatience,
     patience: maxPatience,
     createdAtElapsed: sim.elapsedSeconds,
@@ -234,17 +313,20 @@ export function spawnTicket(sim: KitchenSimulation, dishOverride?: DishId): Orde
 }
 
 export function createInitialSimulation(
-  mode: GameMode = 'shift',
+  mode: GameMode = 'solo',
   bestScore = 0,
   options: SimulationOptions = {},
 ): KitchenSimulation {
   const day = Math.max(1, options.day ?? 1);
+  const durationSeconds: MatchDurationSeconds = options.durationSeconds ?? DEFAULT_MATCH_DURATION;
   const upgrades: UpgradeLevels = { ...DEFAULT_UPGRADES, ...(options.upgrades ?? {}) };
   const dailySpecialDishId = getDailySpecialForDay(day);
+  const isChallenge = mode === 'challenge';
 
   const sim: KitchenSimulation = {
     mode,
-    day,
+    durationSeconds,
+    timeRemaining: durationSeconds,
     dailySpecialDishId,
     outcome: 'none',
     score: 0,
@@ -254,22 +336,21 @@ export function createInitialSimulation(
     maxCombo: 0,
     comboTimer: 0,
     ordersServed: 0,
-    targetOrders: mode === 'shift' ? getTargetOrdersForDay(day) : 0,
     perfectDishes: 0,
     burntCount: 0,
-    stars: MAX_STARS,
-    maxStars: MAX_STARS,
     wave: 1,
     elapsedSeconds: 0,
-    spawnTimer: 6.5,
+    spawnTimer: isChallenge ? 3.8 : 5.5,
     nextTicketId: 1,
     hitstopTimer: 0,
     alarmCooldown: 0,
     skilletAlertCooldown: 0,
     upgrades,
-    chef: createInitialChef(),
+    chef: createInitialChef(isChallenge ? 3.5 : 4.5),
+    bot: isChallenge ? createInitialBot() : null,
     stations: createStations(),
     tickets: [],
+    customerReactions: [],
     nearestStationId: null,
     statusBanner: null,
     statusBannerTimer: 0,
@@ -277,6 +358,9 @@ export function createInitialSimulation(
 
   spawnTicket(sim, 'bruschetta');
   spawnTicket(sim, 'avo_toast');
+  if (isChallenge) {
+    spawnTicket(sim, 'berry_toast');
+  }
   sim.nearestStationId = findNearestStationId(sim);
   return sim;
 }
@@ -363,15 +447,6 @@ export function getStationInteractionHint(sim: KitchenSimulation, stationId: str
       }
       return 'Plating Mat';
     }
-    case 'pass': {
-      if (held?.kind === 'plate' && held.matchedDishId) {
-        const hasTicket = sim.tickets.some((t) => t.dishId === held.matchedDishId);
-        return hasTicket
-          ? `Ring Bell & Serve ${RECIPES[held.matchedDishId].shortName}!`
-          : `No open ticket for ${RECIPES[held.matchedDishId].shortName}`;
-      }
-      return 'Service Pass Window';
-    }
     case 'compost': {
       if (held) {
         return held.kind === 'plate' ? 'Clear Plate to Compost' : `Discard ${ITEM_LABELS[held.kind]}`;
@@ -418,12 +493,49 @@ export function resolveCircleRectCollision(
   return { x, y: ry + rh + r };
 }
 
-export function getStationWalkStandPoint(station: StationState): { x: number; y: number } {
-  if (station.row === 0) return { x: station.col + 0.5, y: 1.48 };
-  if (station.col === 0) return { x: 1.48, y: station.row + 0.5 };
-  if (station.col === GRID_COLS - 1) return { x: GRID_COLS - 1.48, y: station.row + 0.5 };
-  if (station.row === GRID_ROWS - 1) return { x: station.col + 0.5, y: GRID_ROWS - 1.48 };
-  return { x: station.col + 0.5, y: 2.48 };
+export function getStationWalkStandPoint(
+  station: StationState,
+  from?: NavPoint,
+): { x: number; y: number } {
+  const candidates = getStationCandidateStandPoints(station);
+  if (!from || candidates.length === 1) return candidates[0];
+  const path = findShortestPathToAny(from, candidates, NAV_CLEARANCE);
+  return path[path.length - 1] ?? candidates[0];
+}
+
+function clearChefNavPath(chef: ChefState): void {
+  chef.navPath = [];
+  chef.navGoalKey = null;
+}
+
+function ensureChefNavPath(
+  chef: ChefState,
+  goalKey: string,
+  candidates: readonly NavPoint[],
+): NavPoint | null {
+  const curPos: NavPoint = { x: chef.x, y: chef.y };
+  const needsPlan =
+    chef.navGoalKey !== goalKey ||
+    chef.navPath.length === 0 ||
+    !isSegmentClear(curPos, chef.navPath[0], CHEF_RADIUS + 0.01);
+
+  if (needsPlan) {
+    chef.navPath = findShortestPathToAny(curPos, candidates, NAV_CLEARANCE);
+    chef.navGoalKey = goalKey;
+  }
+
+  // Smoothly pop reached or skippable intermediate waypoints
+  while (chef.navPath.length > 1) {
+    const wp = chef.navPath[0];
+    const dist = Math.hypot(wp.x - chef.x, wp.y - chef.y);
+    if (dist <= 0.22 || isSegmentClear(curPos, chef.navPath[1], NAV_CLEARANCE)) {
+      chef.navPath.shift();
+    } else {
+      break;
+    }
+  }
+
+  return chef.navPath[0] ?? null;
 }
 
 function moveChefStep(sim: KitchenSimulation, dt: number, input: InputSnapshot, events: SimEvent[]): void {
@@ -440,36 +552,30 @@ function moveChefStep(sim: KitchenSimulation, dt: number, input: InputSnapshot, 
   let dirX = input.moveX;
   let dirY = input.moveY;
   const hasManualMove = Math.abs(dirX) > 0.08 || Math.abs(dirY) > 0.08;
+  let isAutoNavigating = false;
 
   if (hasManualMove) {
     chef.targetStationId = null;
+    chef.queuedStationId = null;
+    chef.targetTicketId = null;
+    chef.queuedTicketId = null;
+    chef.targetPoint = null;
+    clearChefNavPath(chef);
   } else if (chef.targetStationId) {
     const targetStation = sim.stations.find((s) => s.id === chef.targetStationId);
     if (!targetStation) {
       chef.targetStationId = null;
+      clearChefNavPath(chef);
     } else {
-      const stand = getStationWalkStandPoint(targetStation);
-      let goalX = stand.x;
-      let goalY = stand.y;
-      const crossingIsland =
-        ((chef.y < 2.9 && stand.y > 4.1) || (chef.y > 4.1 && stand.y < 2.9)) &&
-        chef.x > 3.6 &&
-        chef.x < 6.4 &&
-        stand.x > 3.6 &&
-        stand.x < 6.4;
-      if (crossingIsland) {
-        goalX = chef.x < 5.0 ? 3.35 : 6.65;
-        goalY = 3.5;
-      }
-
-      const dx = goalX - chef.x;
-      const dy = goalY - chef.y;
-      const distToGoal = Math.hypot(dx, dy);
-
+      const candidates = getStationCandidateStandPoints(targetStation);
+      const nextWp = ensureChefNavPath(chef, `station:${targetStation.id}`, candidates);
+      const finalWp = chef.navPath[chef.navPath.length - 1] ?? candidates[0];
       const center = stationCenter(targetStation);
+      const distToFinal = Math.hypot(finalWp.x - chef.x, finalWp.y - chef.y);
       const distToStation = Math.hypot(center.x - chef.x, center.y - chef.y);
+      const onFinalLeg = chef.navPath.length <= 1;
 
-      if (distToGoal < 0.22 || (!crossingIsland && distToStation <= INTERACT_REACH - 0.16)) {
+      if (onFinalLeg && (distToFinal < 0.22 || distToStation <= INTERACT_REACH - 0.16)) {
         const fdx = center.x - chef.x;
         const fdy = center.y - chef.y;
         const flen = Math.hypot(fdx, fdy);
@@ -478,13 +584,87 @@ function moveChefStep(sim: KitchenSimulation, dt: number, input: InputSnapshot, 
           chef.facingY = fdy / flen;
         }
         const clickedId = chef.targetStationId;
-        chef.targetStationId = null;
+        const nextQueuedStation = chef.queuedStationId;
+        const nextQueuedTicket = chef.queuedTicketId;
+        chef.targetStationId =
+          nextQueuedStation && nextQueuedStation !== clickedId ? nextQueuedStation : null;
+        chef.queuedStationId = null;
+        if (!chef.targetStationId && nextQueuedTicket !== null) {
+          chef.targetTicketId = nextQueuedTicket;
+          chef.queuedTicketId = null;
+        }
+        clearChefNavPath(chef);
         interactWithStation(sim, clickedId, events);
-      } else {
-        dirX = dx / distToGoal;
-        dirY = dy / distToGoal;
+      } else if (nextWp) {
+        const dx = nextWp.x - chef.x;
+        const dy = nextWp.y - chef.y;
+        const dist = Math.hypot(dx, dy);
+        if (dist > 0.001) {
+          dirX = dx / dist;
+          dirY = dy / dist;
+          isAutoNavigating = true;
+        }
       }
     }
+  } else if (chef.targetTicketId !== null) {
+    const ticket = sim.tickets.find((t) => t.id === chef.targetTicketId);
+    if (!ticket) {
+      chef.targetTicketId = null;
+      clearChefNavPath(chef);
+    } else {
+      const stand = getSeatStandPoint(ticket.seatIndex);
+      const seatWorld = getSeatWorldPos(ticket.seatIndex);
+      const nextWp = ensureChefNavPath(chef, `ticket:${ticket.id}:${ticket.seatIndex}`, [stand]);
+      const finalWp = chef.navPath[chef.navPath.length - 1] ?? stand;
+      const distToFinal = Math.hypot(finalWp.x - chef.x, finalWp.y - chef.y);
+      const distToCustomer = Math.hypot(seatWorld.x - chef.x, seatWorld.y - chef.y);
+      const onFinalLeg = chef.navPath.length <= 1;
+
+      if (onFinalLeg && (distToFinal < 0.25 || distToCustomer <= 1.25)) {
+        chef.facingX = 0;
+        chef.facingY = 1;
+        const clickedTicketId = chef.targetTicketId;
+        chef.targetTicketId = chef.queuedTicketId;
+        chef.queuedTicketId = null;
+        if (chef.queuedStationId) {
+          chef.targetStationId = chef.queuedStationId;
+          chef.queuedStationId = null;
+        }
+        clearChefNavPath(chef);
+        serveCustomerTicket(sim, clickedTicketId, events);
+      } else if (nextWp) {
+        const dx = nextWp.x - chef.x;
+        const dy = nextWp.y - chef.y;
+        const dist = Math.hypot(dx, dy);
+        if (dist > 0.001) {
+          dirX = dx / dist;
+          dirY = dy / dist;
+          isAutoNavigating = true;
+        }
+      }
+    }
+  } else if (chef.targetPoint) {
+    const safeTarget = clampToWalkablePoint(chef.targetPoint.x, chef.targetPoint.y, NAV_CLEARANCE);
+    chef.targetPoint = safeTarget;
+    const key = `point:${safeTarget.x.toFixed(2)},${safeTarget.y.toFixed(2)}`;
+    const nextWp = ensureChefNavPath(chef, key, [safeTarget]);
+    const distToFinal = Math.hypot(safeTarget.x - chef.x, safeTarget.y - chef.y);
+
+    if (chef.navPath.length <= 1 && distToFinal < 0.16) {
+      chef.targetPoint = null;
+      clearChefNavPath(chef);
+    } else if (nextWp) {
+      const dx = nextWp.x - chef.x;
+      const dy = nextWp.y - chef.y;
+      const dist = Math.hypot(dx, dy);
+      if (dist > 0.001) {
+        dirX = dx / dist;
+        dirY = dy / dist;
+        isAutoNavigating = true;
+      }
+    }
+  } else if (chef.navPath.length > 0 || chef.navGoalKey !== null) {
+    clearChefNavPath(chef);
   }
 
   if (input.dashPressed && chef.dashCooldown <= 0) {
@@ -535,11 +715,22 @@ function moveChefStep(sim: KitchenSimulation, dt: number, input: InputSnapshot, 
   nextX = Math.max(minX, Math.min(maxX, nextX));
   nextY = Math.max(minY, Math.min(maxY, nextY));
 
-  const resolved = resolveCircleRectCollision(nextX, nextY, CHEF_RADIUS, 4.0, 3.0, 2.0, 1.0);
-  chef.x = Math.max(minX, Math.min(maxX, resolved.x));
-  chef.y = Math.max(minY, Math.min(maxY, resolved.y));
+  for (const rect of KITCHEN_OBSTACLES) {
+    const resolved = resolveCircleRectCollision(nextX, nextY, CHEF_RADIUS, rect.x, rect.y, rect.w, rect.h);
+    nextX = resolved.x;
+    nextY = resolved.y;
+  }
 
-  chef.walkDistance += Math.hypot(chef.x - prevX, chef.y - prevY);
+  chef.x = Math.max(minX, Math.min(maxX, nextX));
+  chef.y = Math.max(minY, Math.min(maxY, nextY));
+
+  const moved = Math.hypot(chef.x - prevX, chef.y - prevY);
+  // Defense-in-depth: if blocked during auto-nav, immediately force fresh A* replan
+  if (isAutoNavigating && dt > 0.001 && moved < 0.004) {
+    chef.navGoalKey = null;
+  }
+
+  chef.walkDistance += moved;
   if (chef.walkDistance - chef.lastStepDistance >= 0.95) {
     chef.lastStepDistance = chef.walkDistance;
     events.push({ sound: 'footstep' });
@@ -551,26 +742,181 @@ export function calculateServeScore(
   perfectCount: number,
   patienceRatio: number,
   combo: number,
-  isVip = false,
+  variety: CustomerVariety | boolean = 'regular',
   isDailySpecial = false,
 ): number {
   const multiplier = Math.min(3.0, 1 + Math.max(0, combo - 1) * 0.25);
   const perfectBonus = perfectCount * 40;
   const speedBonus = Math.round(Math.max(0, Math.min(1, patienceRatio)) * 45);
-  const specialMult = (isVip ? 1.5 : 1) * (isDailySpecial ? 1.35 : 1);
+  const resolved: CustomerVariety =
+    typeof variety === 'boolean' ? (variety ? 'vip' : 'regular') : variety;
+  const varietyScoreMult =
+    resolved === 'vip' ? 1.5 : resolved === 'express' ? 1.25 : resolved === 'foodie' ? 1.15 : 1;
+  const specialMult = varietyScoreMult * (isDailySpecial ? 1.35 : 1);
   return Math.round((recipeBaseScore + perfectBonus + speedBonus) * multiplier * specialMult);
 }
 
 export function calculateServeCoins(
   componentCount: number,
   perfectCount: number,
-  isVip: boolean,
+  variety: CustomerVariety | boolean,
   isDailySpecial: boolean,
   upgrades: UpgradeLevels,
 ): number {
   const baseCoins = 8 + componentCount * 3 + perfectCount * 4;
-  const bonusMult = (isVip ? 2 : 1) * (isDailySpecial ? 1.5 : 1) * getTipMultiplier(upgrades);
+  const resolved: CustomerVariety =
+    typeof variety === 'boolean' ? (variety ? 'vip' : 'regular') : variety;
+  const varietyTipMult =
+    resolved === 'vip' ? 2.0 : resolved === 'foodie' ? 1.6 : resolved === 'express' ? 1.4 : 1;
+  const bonusMult = varietyTipMult * (isDailySpecial ? 1.5 : 1) * getTipMultiplier(upgrades);
   return Math.max(5, Math.round(baseCoins * bonusMult));
+}
+
+export function findNearestServeableTicket(sim: KitchenSimulation): OrderTicket | null {
+  const held = sim.chef.held;
+  if (!held || held.kind !== 'plate' || !held.matchedDishId) return null;
+  let best: OrderTicket | null = null;
+  let bestDist = 1.6;
+  for (const t of sim.tickets) {
+    if (t.dishId !== held.matchedDishId) continue;
+    const seat = getSeatWorldPos(t.seatIndex);
+    const d = Math.hypot(seat.x - sim.chef.x, seat.y - sim.chef.y);
+    if (d <= bestDist) {
+      bestDist = d;
+      best = t;
+    }
+  }
+  return best;
+}
+
+export function serveCustomerTicket(
+  sim: KitchenSimulation,
+  ticketId: number,
+  events: SimEvent[],
+): boolean {
+  const chef = sim.chef;
+  const ticketIndex = sim.tickets.findIndex((t) => t.id === ticketId);
+  if (ticketIndex === -1) return false;
+  const ticket = sim.tickets[ticketIndex];
+  const seatPos = getSeatWorldPos(ticket.seatIndex);
+
+  const wantedRecipe = RECIPES[ticket.dishId];
+  const recipeStepsText = wantedRecipe.steps.map((s) => s.label).join(' + ');
+
+  if (!chef.held || chef.held.kind !== 'plate' || !chef.held.matchedDishId) {
+    sim.statusBanner = `${wantedRecipe.shortName}: ${recipeStepsText} → Plate`;
+    sim.statusBannerTimer = 3.6;
+    events.push({
+      sound: 'error',
+      floatingText: `Needs ${wantedRecipe.shortName}!`,
+      floatingColor: '#F59E0B',
+      floatingX: seatPos.x,
+      floatingY: seatPos.y - 0.55,
+    });
+    return false;
+  }
+
+  const dishId = chef.held.matchedDishId;
+  if (ticket.dishId !== dishId) {
+    sim.statusBanner = `${ticket.guestName} wants ${wantedRecipe.shortName}: ${recipeStepsText}`;
+    sim.statusBannerTimer = 3.6;
+    events.push({
+      sound: 'error',
+      floatingText: `${ticket.guestName} wants ${wantedRecipe.shortName}!`,
+      floatingColor: '#F87171',
+      floatingX: seatPos.x,
+      floatingY: seatPos.y - 0.55,
+    });
+    return false;
+  }
+
+  const recipe = RECIPES[dishId];
+  const perfectCount = chef.held.plateComponents.filter((c) => c.isPerfect).length;
+  const patienceRatio = ticket.maxPatience > 0 ? ticket.patience / ticket.maxPatience : 0;
+
+  sim.combo += 1;
+  sim.maxCombo = Math.max(sim.maxCombo, sim.combo);
+  sim.comboTimer = COMBO_WINDOW;
+  sim.ordersServed += 1;
+  if (perfectCount > 0) sim.perfectDishes += 1;
+
+  const gained = calculateServeScore(
+    recipe.baseScore,
+    perfectCount,
+    patienceRatio,
+    sim.combo,
+    ticket.variety,
+    ticket.isDailySpecial,
+  );
+  const coins = calculateServeCoins(
+    recipe.components.length,
+    perfectCount,
+    ticket.variety,
+    ticket.isDailySpecial,
+    sim.upgrades,
+  );
+
+  sim.score += gained;
+  sim.bestScore = Math.max(sim.bestScore, sim.score);
+  sim.coinsEarned += coins;
+  sim.tickets.splice(ticketIndex, 1);
+  sim.customerReactions.push({
+    id: ticket.id,
+    avatarId: ticket.avatarId,
+    seatIndex: ticket.seatIndex,
+    guestName: ticket.guestName,
+    variety: ticket.variety,
+    kind: 'happy',
+    text:
+      ticket.variety === 'vip'
+        ? `VIP Tip! +${coins}c ★`
+        : ticket.variety === 'foodie'
+          ? `Tip +${coins}c ♥`
+          : ticket.variety === 'express'
+            ? `Speed +${coins}c ⚡`
+            : HAPPY_QUIPS[(ticket.id + sim.ordersServed) % HAPPY_QUIPS.length],
+    timer: 1.55,
+    maxTimer: 1.55,
+  });
+  chef.held = null;
+  chef.happyTimer = 0.65;
+  chef.squashX = 0.84;
+  chef.squashY = 1.22;
+
+  sim.wave = computeWaveForOrders(sim.ordersServed, sim.elapsedSeconds);
+  const varietyTag =
+    ticket.variety === 'vip'
+      ? 'VIP Tip!'
+      : ticket.variety === 'foodie'
+        ? 'Foodie Tip!'
+        : ticket.variety === 'express'
+          ? 'Express Bonus!'
+          : 'Served';
+  sim.statusBanner = `${varietyTag} ${recipe.shortName} · +${gained} · +${coins} Coins`;
+  sim.statusBannerTimer = 2.4;
+
+  events.push({
+    sound: 'serve',
+    hitstop: 0.045,
+    shakeTrauma: 0.25,
+    particleKind: 'serve',
+    particleX: seatPos.x,
+    particleY: seatPos.y - 0.3,
+    particleColor: ticket.isVip ? '#FDE047' : '#FBBF24',
+    particleCount: ticket.isVip ? 32 : 24,
+    floatingText: `+${gained} (+${coins}c)${ticket.isVip ? ' ★ VIP' : perfectCount > 0 ? ' ★' : ''}`,
+    floatingColor: ticket.isVip ? '#FDE047' : '#FBBF24',
+    floatingX: seatPos.x,
+    floatingY: seatPos.y - 0.65,
+  });
+  events.push({ sound: 'coin' });
+
+  if (sim.tickets.length === 0 || (sim.mode === 'challenge' && sim.tickets.length < 2)) {
+    const nextTicket = spawnTicket(sim);
+    sim.spawnTimer = computeSpawnInterval(sim.wave, sim.mode);
+    events.push({ sound: nextTicket.isVip ? 'vip_arrive' : 'ticket_new' });
+  }
+  return true;
 }
 
 export function interactWithStation(
@@ -678,6 +1024,7 @@ export function interactWithStation(
         st.item = null;
         st.chopProgress = 0;
         st.isChoppingActive = false;
+        st.claimedBy = null;
         events.push({ sound: 'pickup' });
         return true;
       }
@@ -686,6 +1033,7 @@ export function interactWithStation(
         st.item = chef.held.kind;
         st.chopProgress = Math.min(1, CHOP_TAP_AMOUNT * chopMult);
         st.isChoppingActive = true;
+        st.claimedBy = 'player';
         chef.held = null;
         events.push({
           sound: 'chop',
@@ -725,6 +1073,7 @@ export function interactWithStation(
           st.item = null;
           st.cookProgress = 0;
           st.cookStage = 'none';
+          st.claimedBy = null;
           events.push({
             sound: 'trash',
             floatingText: 'Dump in Compost',
@@ -748,6 +1097,7 @@ export function interactWithStation(
           st.item = null;
           st.cookProgress = 0;
           st.cookStage = 'none';
+          st.claimedBy = null;
 
           if (isPerfect) {
             events.push({
@@ -778,6 +1128,7 @@ export function interactWithStation(
         st.item = null;
         st.cookProgress = 0;
         st.cookStage = 'none';
+        st.claimedBy = null;
         events.push({ sound: 'pickup' });
         return true;
       }
@@ -786,6 +1137,7 @@ export function interactWithStation(
         st.item = chef.held.kind;
         st.cookProgress = 0;
         st.cookStage = 'cooking';
+        st.claimedBy = 'player';
         chef.held = null;
         events.push({
           sound: 'sear_start',
@@ -810,6 +1162,7 @@ export function interactWithStation(
             isPerfect: chef.held.isPerfect,
           });
           st.matchedDishId = matchCompleteDish(st.plateComponents);
+          st.claimedBy = 'player';
           chef.held = null;
 
           if (st.matchedDishId) {
@@ -851,6 +1204,7 @@ export function interactWithStation(
       if (chef.held?.kind === 'plate' && st.plateComponents.length === 0) {
         st.plateComponents = [...chef.held.plateComponents];
         st.matchedDishId = chef.held.matchedDishId;
+        st.claimedBy = 'player';
         chef.held = null;
         events.push({ sound: 'place' });
         return true;
@@ -867,114 +1221,13 @@ export function interactWithStation(
         };
         st.plateComponents = [];
         st.matchedDishId = null;
+        st.claimedBy = null;
         events.push({ sound: 'pickup' });
         return true;
       }
 
       events.push({ sound: 'error' });
       return false;
-    }
-
-    case 'pass': {
-      if (!chef.held || chef.held.kind !== 'plate' || !chef.held.matchedDishId) {
-        events.push({
-          sound: 'error',
-          floatingText: 'Need Complete Dish!',
-          floatingColor: '#F59E0B',
-          floatingX: center.x,
-          floatingY: center.y + 0.35,
-        });
-        return false;
-      }
-
-      const dishId = chef.held.matchedDishId;
-      let ticketIndex = -1;
-      let lowestPatience = Infinity;
-      for (let i = 0; i < sim.tickets.length; i++) {
-        if (sim.tickets[i].dishId === dishId && sim.tickets[i].patience < lowestPatience) {
-          lowestPatience = sim.tickets[i].patience;
-          ticketIndex = i;
-        }
-      }
-
-      if (ticketIndex === -1) {
-        events.push({
-          sound: 'error',
-          floatingText: `No Order for ${RECIPES[dishId].shortName}`,
-          floatingColor: '#F87171',
-          floatingX: center.x,
-          floatingY: center.y + 0.35,
-        });
-        return false;
-      }
-
-      const ticket = sim.tickets[ticketIndex];
-      const recipe = RECIPES[dishId];
-      const perfectCount = chef.held.plateComponents.filter((c) => c.isPerfect).length;
-      const patienceRatio = ticket.maxPatience > 0 ? ticket.patience / ticket.maxPatience : 0;
-
-      sim.combo += 1;
-      sim.maxCombo = Math.max(sim.maxCombo, sim.combo);
-      sim.comboTimer = COMBO_WINDOW;
-      sim.ordersServed += 1;
-      if (perfectCount > 0) sim.perfectDishes += 1;
-
-      const gained = calculateServeScore(
-        recipe.baseScore,
-        perfectCount,
-        patienceRatio,
-        sim.combo,
-        ticket.isVip,
-        ticket.isDailySpecial,
-      );
-      const coins = calculateServeCoins(
-        recipe.components.length,
-        perfectCount,
-        ticket.isVip,
-        ticket.isDailySpecial,
-        sim.upgrades,
-      );
-
-      sim.score += gained;
-      sim.bestScore = Math.max(sim.bestScore, sim.score);
-      sim.coinsEarned += coins;
-      sim.tickets.splice(ticketIndex, 1);
-      chef.held = null;
-      chef.happyTimer = 0.65;
-      chef.squashX = 0.84;
-      chef.squashY = 1.22;
-
-      sim.wave = computeWaveForOrders(sim.ordersServed, sim.elapsedSeconds);
-      sim.statusBanner = `Served ${recipe.shortName}! +${gained} · +${coins} Coins`;
-      sim.statusBannerTimer = 2.2;
-
-      events.push({
-        sound: 'serve',
-        hitstop: 0.045,
-        shakeTrauma: 0.25,
-        particleKind: 'serve',
-        particleX: center.x,
-        particleY: center.y,
-        particleColor: ticket.isVip ? '#FDE047' : '#FBBF24',
-        particleCount: 26,
-        floatingText: `+${gained} (+${coins}c)${perfectCount > 0 ? ' ★' : ''}`,
-        floatingColor: '#FBBF24',
-        floatingX: center.x,
-        floatingY: center.y + 0.4,
-      });
-      events.push({ sound: 'coin' });
-
-      if (sim.mode === 'shift' && sim.ordersServed >= sim.targetOrders) {
-        // Day clear coin bonus!
-        sim.coinsEarned += 25 + sim.day * 5;
-        sim.outcome = 'victory';
-        events.push({ sound: 'victory' });
-      } else if (sim.tickets.length === 0) {
-        const nextTicket = spawnTicket(sim);
-        sim.spawnTimer = computeSpawnInterval(sim.wave);
-        events.push({ sound: nextTicket.isVip ? 'vip_arrive' : 'ticket_new' });
-      }
-      return true;
     }
 
     case 'compost': {
@@ -1020,7 +1273,18 @@ export function stepSimulation(
   }
 
   sim.elapsedSeconds += dt;
-  sim.wave = computeWaveForOrders(sim.ordersServed, sim.elapsedSeconds);
+  sim.timeRemaining = Math.max(0, sim.timeRemaining - dt);
+  sim.wave = computeWaveForOrders(
+    sim.ordersServed + (sim.bot?.ordersServed ?? 0),
+    sim.elapsedSeconds,
+  );
+
+  for (let i = sim.customerReactions.length - 1; i >= 0; i--) {
+    sim.customerReactions[i].timer -= dt;
+    if (sim.customerReactions[i].timer <= 0) {
+      sim.customerReactions.splice(i, 1);
+    }
+  }
 
   if (sim.comboTimer > 0) {
     sim.comboTimer = Math.max(0, sim.comboTimer - dt);
@@ -1032,8 +1296,35 @@ export function stepSimulation(
   moveChefStep(sim, dt, input, events);
   sim.nearestStationId = findNearestStationId(sim);
 
-  if (input.interactPressed && sim.nearestStationId) {
-    interactWithStation(sim, sim.nearestStationId, events);
+  if (input.interactPressed) {
+    const serveTarget = findNearestServeableTicket(sim);
+    if (serveTarget) {
+      serveCustomerTicket(sim, serveTarget.id, events);
+    } else if (sim.nearestStationId) {
+      interactWithStation(sim, sim.nearestStationId, events);
+    }
+  }
+
+  // Step Rival Bot Chef in Challenge Mode
+  if (sim.bot) {
+    stepBotChef(
+      sim,
+      dt,
+      {
+        gridCols: GRID_COLS,
+        gridRows: GRID_ROWS,
+        perfectThreshold: PERFECT_THRESHOLD,
+        comboWindow: COMBO_WINDOW,
+        stationCenter,
+        getSeatWorldPos,
+        getSeatStandPoint,
+        resolveCircleRectCollision,
+        calculateServeScore,
+        spawnTicket,
+        computeSpawnInterval,
+      },
+      events,
+    );
   }
 
   const chopMult = getChopMultiplier(sim.upgrades);
@@ -1044,7 +1335,13 @@ export function stepSimulation(
   for (const st of sim.stations) {
     if (st.pulseTimer > 0) st.pulseTimer = Math.max(0, st.pulseTimer - dt);
 
-    if (st.type === 'board' && st.item && isChoppable(st.item) && st.isChoppingActive) {
+    if (
+      st.type === 'board' &&
+      st.item &&
+      isChoppable(st.item) &&
+      st.isChoppingActive &&
+      st.claimedBy !== 'bot'
+    ) {
       const c = stationCenter(st);
       const dist = Math.hypot(c.x - sim.chef.x, c.y - sim.chef.y);
       if (dist <= INTERACT_REACH + 0.15) {
@@ -1084,7 +1381,9 @@ export function stepSimulation(
       if (st.cookProgress >= burnThreshold) {
         nextStage = 'burnt';
         st.item = 'burnt';
-        sim.burntCount += 1;
+        if (st.claimedBy !== 'bot') {
+          sim.burntCount += 1;
+        }
       } else if (st.cookProgress >= warningThreshold) {
         nextStage = 'warning';
       } else if (st.cookProgress >= PERFECT_THRESHOLD) {
@@ -1092,9 +1391,9 @@ export function stepSimulation(
       }
       st.cookStage = nextStage;
 
-      if (nextStage === 'warning') anyWarningSkillet = true;
+      if (nextStage === 'warning' && st.claimedBy !== 'bot') anyWarningSkillet = true;
 
-      if (prevStage !== nextStage) {
+      if (prevStage !== nextStage && st.claimedBy !== 'bot') {
         const c = stationCenter(st);
         if (nextStage === 'perfect') {
           events.push({
@@ -1146,7 +1445,7 @@ export function stepSimulation(
     events.push({ sound: 'skillet_alert' });
   }
 
-  // Order tickets countdown & urgent expiring alarm
+  // Order tickets countdown & urgent expiring alarm (walkouts reset combo without ending timed match)
   let anyUrgentTicket = false;
   for (let i = sim.tickets.length - 1; i >= 0; i--) {
     const t = sim.tickets[i];
@@ -1156,14 +1455,24 @@ export function stepSimulation(
     }
     if (t.patience <= 0) {
       sim.tickets.splice(i, 1);
-      sim.stars = Math.max(0, sim.stars - 1);
+      sim.customerReactions.push({
+        id: t.id,
+        avatarId: t.avatarId,
+        seatIndex: t.seatIndex,
+        guestName: t.guestName,
+        variety: t.variety,
+        kind: 'upset',
+        text: 'Gotta go!',
+        timer: 1.35,
+        maxTimer: 1.35,
+      });
       sim.combo = 0;
       sim.comboTimer = 0;
-      sim.statusBanner = `Table ${t.tableNumber} walked out!`;
-      sim.statusBannerTimer = 2.4;
+      sim.statusBanner = `${t.guestName} walked out! Streak reset`;
+      sim.statusBannerTimer = 2.2;
       events.push({
         sound: 'ticket_expired',
-        shakeTrauma: 0.38,
+        shakeTrauma: 0.3,
       });
     }
   }
@@ -1171,27 +1480,51 @@ export function stepSimulation(
   if (sim.alarmCooldown > 0) {
     sim.alarmCooldown = Math.max(0, sim.alarmCooldown - dt);
   }
-  if (anyUrgentTicket && sim.alarmCooldown <= 0 && sim.stars > 0) {
-    sim.alarmCooldown = 1.45;
+  if ((anyUrgentTicket || (sim.timeRemaining > 0 && sim.timeRemaining <= 10)) && sim.alarmCooldown <= 0) {
+    sim.alarmCooldown = sim.timeRemaining <= 5 ? 0.95 : 1.45;
     events.push({ sound: 'alarm_urgent' });
   }
 
-  if (sim.stars <= 0) {
-    sim.outcome = 'defeat';
-    events.push({ sound: 'defeat' });
+  // Match timer finished -> settle Solo Rush or Bot Challenge outcome!
+  if (sim.timeRemaining <= 0) {
+    if (sim.mode === 'challenge' && sim.bot) {
+      const playerServed = sim.ordersServed;
+      const botServed = sim.bot.ordersServed;
+      const playerScore = Math.round(sim.score);
+      const botScore = Math.round(sim.bot.score);
+
+      if (playerServed > botServed || (playerServed === botServed && playerScore > botScore)) {
+        sim.outcome = 'victory';
+        sim.coinsEarned += 35;
+        events.push({ sound: 'victory' });
+      } else if (botServed > playerServed || botScore > playerScore) {
+        sim.outcome = 'defeat';
+        sim.coinsEarned += 10;
+        events.push({ sound: 'defeat' });
+      } else {
+        sim.outcome = 'draw';
+        sim.coinsEarned += 20;
+        events.push({ sound: 'victory' });
+      }
+    } else {
+      sim.outcome = 'finished';
+      sim.coinsEarned += 10 + sim.ordersServed * 3;
+      events.push({ sound: sim.ordersServed > 0 ? 'victory' : 'defeat' });
+    }
     return events;
   }
 
   sim.spawnTimer -= dt;
+  const minTickets = sim.mode === 'challenge' ? 2 : 1;
   if (sim.spawnTimer <= 0) {
     if (sim.tickets.length < MAX_ACTIVE_TICKETS) {
       const nextTicket = spawnTicket(sim);
       events.push({ sound: nextTicket.isVip ? 'vip_arrive' : 'ticket_new' });
     }
-    sim.spawnTimer = computeSpawnInterval(sim.wave);
-  } else if (sim.tickets.length === 0) {
+    sim.spawnTimer = computeSpawnInterval(sim.wave, sim.mode);
+  } else if (sim.tickets.length < minTickets) {
     const nextTicket = spawnTicket(sim);
-    sim.spawnTimer = computeSpawnInterval(sim.wave);
+    sim.spawnTimer = computeSpawnInterval(sim.wave, sim.mode);
     events.push({ sound: nextTicket.isVip ? 'vip_arrive' : 'ticket_new' });
   }
 
@@ -1212,14 +1545,14 @@ export function createStatsSnapshot(
     score: Math.round(sim.score),
     bestScore: Math.round(sim.bestScore),
     coinsEarned: Math.round(sim.coinsEarned),
-    day: sim.day,
+    durationSeconds: sim.durationSeconds,
     ordersServed: sim.ordersServed,
-    targetOrders: sim.targetOrders,
+    botOrdersServed: sim.bot?.ordersServed ?? 0,
+    botScore: Math.round(sim.bot?.score ?? 0),
     perfectDishes: sim.perfectDishes,
     maxCombo: sim.maxCombo,
     elapsedSeconds: Math.round(sim.elapsedSeconds),
     wave: sim.wave,
-    starsRemaining: sim.stars,
     outcome: sim.outcome,
     mode: sim.mode,
     dailySpecialDishId: sim.dailySpecialDishId,
