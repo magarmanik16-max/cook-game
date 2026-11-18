@@ -8,6 +8,10 @@ import {
   NAV_CLEARANCE,
 } from './pathfinding';
 import {
+  getLoginRewardStatus,
+  LOGIN_REWARD_SCHEDULE,
+} from './loginRewards';
+import {
   DAILY_ALL_CLEAR_BONUS,
   DAILY_MISSION_CATALOG,
   ensureCurrentDailyMissions,
@@ -15,12 +19,20 @@ import {
 } from './missions';
 import {
   claimDailyAllClearBonus,
+  claimDailyLoginReward,
   claimDailyMission,
+  completeTutorial,
   createDefaultProgress,
   finalizeShiftProgress,
   purchaseUpgrade,
   selectOrUnlockTheme,
 } from './progression';
+import {
+  getNextTutorialStep,
+  getTutorialGuideSnapshot,
+  shouldAutoAdvanceTutorial,
+  TUTORIAL_COMPLETION_BONUS,
+} from './tutorial';
 import { canAddToPlate, matchCompleteDish } from './recipes';
 import {
   BURNT_THRESHOLD,
@@ -500,6 +512,127 @@ test('high combos (3x+) emit celebratory combo_burst particle and flourish event
   assert.ok((comboEvent.particleCount ?? 0) >= 22);
   assert.ok(comboEvent.floatingText?.includes('3x'));
 });
+
+test('7-day daily login rewards increment streak on consecutive days, stay idempotent same-day, reset on missed day, and wrap after Day 7', () => {
+  let prog = createDefaultProgress(0, '2026-11-10');
+
+  // Day 1 ready
+  const s1 = getLoginRewardStatus(prog.loginRewards, '2026-11-10');
+  assert.equal(s1.canClaimToday, true);
+  assert.equal(s1.activeDay, 1);
+  assert.equal(s1.todayTier.coins, LOGIN_REWARD_SCHEDULE[0].coins);
+
+  const c1 = claimDailyLoginReward(prog, '2026-11-10');
+  assert.equal(c1.claimed, true);
+  assert.equal(c1.reward, 25);
+  assert.equal(c1.claimedDay, 1);
+  prog = c1.next;
+  assert.equal(prog.coins, 25);
+
+  // Same-day repeat claim rejected
+  const c1Dup = claimDailyLoginReward(prog, '2026-11-10');
+  assert.equal(c1Dup.claimed, false);
+  assert.equal(c1Dup.reward, 0);
+  assert.equal(prog.coins, 25);
+
+  // Consecutive Day 2
+  const c2 = claimDailyLoginReward(prog, '2026-11-11');
+  assert.equal(c2.claimed, true);
+  assert.equal(c2.claimedDay, 2);
+  assert.equal(c2.reward, 40);
+  prog = c2.next;
+  assert.equal(prog.coins, 65);
+
+  // Skipping a day (Nov 13) resets streak to Day 1
+  const sMissed = getLoginRewardStatus(prog.loginRewards, '2026-11-13');
+  assert.equal(sMissed.canClaimToday, true);
+  assert.equal(sMissed.activeDay, 1);
+  assert.equal(sMissed.streakBroken, true);
+
+  // Simulate claiming Days 1..7 consecutively and verify Day 7 Grand Prize + Day 8 wrap
+  let p7 = createDefaultProgress(0, '2026-11-01');
+  const dates = [
+    '2026-11-01',
+    '2026-11-02',
+    '2026-11-03',
+    '2026-11-04',
+    '2026-11-05',
+    '2026-11-06',
+    '2026-11-07',
+  ];
+  let lastReward = 0;
+  for (let i = 0; i < dates.length; i++) {
+    const res = claimDailyLoginReward(p7, dates[i]);
+    assert.equal(res.claimed, true);
+    assert.equal(res.claimedDay, i + 1);
+    lastReward = res.reward;
+    p7 = res.next;
+  }
+  assert.equal(lastReward, 200, 'Day 7 must pay the 200-coin Grand Chef Chest');
+
+  const day8Status = getLoginRewardStatus(p7.loginRewards, '2026-11-08');
+  assert.equal(day8Status.canClaimToday, true);
+  assert.equal(day8Status.activeDay, 1, 'Day 8 wraps cleanly back to Day 1');
+});
+
+test('interactive step-by-step tutorial highlights stations dynamically and awards completion bonus once', () => {
+  const sim = createInitialSimulation('solo', 0, { durationSeconds: 60 });
+
+  // Step 1: chop — initially highlights tomato pantry + secondary cutting boards
+  const g1Start = getTutorialGuideSnapshot(sim, 'chop');
+  assert.deepEqual(g1Start.primaryStationIds, ['pantry_tomato']);
+  assert.deepEqual(g1Start.secondaryStationIds, ['board_1', 'board_2']);
+  assert.equal(shouldAutoAdvanceTutorial(sim, 'chop'), false);
+
+  // Pick up raw tomato -> shifts primary glowing pulse directly onto cutting boards
+  sim.chef.held = { kind: 'tomato_raw', isPerfect: false, plateComponents: [], matchedDishId: null };
+  const g1Held = getTutorialGuideSnapshot(sim, 'chop');
+  assert.deepEqual(g1Held.primaryStationIds, ['board_1', 'board_2']);
+
+  // Place on board_1 -> auto-advances to cook step
+  const board1 = sim.stations.find((s) => s.id === 'board_1')!;
+  board1.item = 'tomato_raw';
+  sim.chef.held = null;
+  assert.equal(shouldAutoAdvanceTutorial(sim, 'chop'), true);
+  assert.equal(getNextTutorialStep('chop'), 'cook');
+
+  // Step 2: cook — highlights egg pantry -> shifts to skillets when holding raw egg
+  const g2Start = getTutorialGuideSnapshot(sim, 'cook');
+  assert.deepEqual(g2Start.primaryStationIds, ['pantry_egg']);
+  sim.chef.held = { kind: 'egg_raw', isPerfect: false, plateComponents: [], matchedDishId: null };
+  assert.deepEqual(getTutorialGuideSnapshot(sim, 'cook').primaryStationIds, ['skillet_1', 'skillet_2']);
+  const skillet1 = sim.stations.find((s) => s.id === 'skillet_1')!;
+  skillet1.item = 'egg_raw';
+  sim.chef.held = null;
+  assert.equal(shouldAutoAdvanceTutorial(sim, 'cook'), true);
+  assert.equal(getNextTutorialStep('cook'), 'plate');
+
+  // Step 3: plate -> highlights plate mats and advances once plate has components
+  const g3 = getTutorialGuideSnapshot(sim, 'plate');
+  assert.deepEqual(g3.primaryStationIds, ['plate_1', 'plate_2']);
+  const plate1 = sim.stations.find((s) => s.id === 'plate_1')!;
+  plate1.plateComponents = [{ kind: 'bun', isPerfect: false }];
+  assert.equal(shouldAutoAdvanceTutorial(sim, 'plate'), true);
+  assert.equal(getNextTutorialStep('plate'), 'serve');
+
+  // Step 4: serve -> highlights waiting customer ticket(s) and finishes when ordersServed >= 1
+  const g4 = getTutorialGuideSnapshot(sim, 'serve');
+  assert.ok(g4.highlightTicketIds.length >= 1, 'Serve step must highlight waiting customers');
+  assert.equal(shouldAutoAdvanceTutorial(sim, 'serve'), false);
+  sim.ordersServed = 1;
+  assert.equal(shouldAutoAdvanceTutorial(sim, 'serve'), true);
+  assert.equal(getNextTutorialStep('serve'), null);
+
+  // Tutorial completion awards welcome bonus once
+  const p0 = createDefaultProgress();
+  const done1 = completeTutorial(p0, true);
+  assert.equal(done1.bonusAwarded, TUTORIAL_COMPLETION_BONUS);
+  assert.equal(done1.next.tutorialCompleted, true);
+  assert.equal(done1.next.coins, TUTORIAL_COMPLETION_BONUS);
+  const done2 = completeTutorial(done1.next, true);
+  assert.equal(done2.bonusAwarded, 0, 'Replaying tutorial must not double-award welcome bonus');
+});
+
 
 
 

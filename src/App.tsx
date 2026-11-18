@@ -2,12 +2,16 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { BistroShopModal, type ShopTab } from './components/BistroShopModal';
 import { GameHud, type HudState } from './components/GameHud';
 import { GameModals } from './components/GameModals';
+import { LoginRewardsModal } from './components/LoginRewardsModal';
 import { MobileControls } from './components/MobileControls';
 import { TitleScreen } from './components/TitleScreen';
+import { TutorialOverlay } from './components/TutorialOverlay';
 import { kitchenAudio } from './game/audio';
 import {
   claimDailyAllClearBonus,
+  claimDailyLoginReward,
   claimDailyMission,
+  completeTutorial,
   finalizeShiftProgress,
   loadProgress,
   purchaseUpgrade,
@@ -23,6 +27,12 @@ import {
   getStationInteractionHint,
   stepSimulation,
 } from './game/rules';
+import {
+  getNextTutorialStep,
+  getTutorialGuideSnapshot,
+  shouldAutoAdvanceTutorial,
+  type TutorialGuideSnapshot,
+} from './game/tutorial';
 import { useViewportProfile } from './game/viewport';
 import type {
   DailyMissionId,
@@ -33,6 +43,7 @@ import type {
   MatchDurationSeconds,
   PersistentProgress,
   RunStatsSnapshot,
+  TutorialStepId,
   UpgradeKey,
 } from './game/types';
 
@@ -82,6 +93,9 @@ export default function App() {
   const [phase, setPhase] = useState<GamePhase>(initialAutostart ? 'playing' : 'title');
   const [shopOpen, setShopOpen] = useState(false);
   const [shopTab, setShopTab] = useState<ShopTab>('upgrades');
+  const [loginRewardsOpen, setLoginRewardsOpen] = useState(false);
+  const [tutorialStep, setTutorialStep] = useState<TutorialStepId | null>(null);
+  const [tutorialGuide, setTutorialGuide] = useState<TutorialGuideSnapshot | null>(null);
   const [muted, setMuted] = useState(false);
   const viewport = useViewportProfile();
 
@@ -112,11 +126,15 @@ export default function App() {
   const modeRef = useRef<GameMode>(mode);
   const durationRef = useRef<MatchDurationSeconds>(durationSeconds);
   const shopOpenRef = useRef<boolean>(shopOpen);
+  const loginRewardsOpenRef = useRef<boolean>(loginRewardsOpen);
+  const tutorialStepRef = useRef<TutorialStepId | null>(tutorialStep);
   const wakeLoopRef = useRef<(() => void) | null>(null);
   phaseRef.current = phase;
   modeRef.current = mode;
   durationRef.current = durationSeconds;
   shopOpenRef.current = shopOpen;
+  loginRewardsOpenRef.current = loginRewardsOpen;
+  tutorialStepRef.current = tutorialStep;
 
   // Unified input state (keyboard fallback + edge-triggered actions)
   const keysHeldRef = useRef<Set<string>>(new Set());
@@ -157,10 +175,20 @@ export default function App() {
       simRef.current = fresh;
       const nextRenderer = new KitchenRenderer();
       nextRenderer.setTheme(p.selectedTheme);
+
+      const shouldRunTutorial = !p.tutorialCompleted;
+      const initialStep: TutorialStepId | null = shouldRunTutorial ? 'chop' : null;
+      const initialGuide = initialStep ? getTutorialGuideSnapshot(fresh, initialStep) : null;
+      nextRenderer.setTutorialHighlight(initialGuide);
+      tutorialStepRef.current = initialStep;
+      setTutorialStep(initialStep);
+      setTutorialGuide(initialGuide);
+
       rendererRef.current = nextRenderer;
       setHud(extractHudState(fresh));
       setEndStats(createStatsSnapshot(fresh));
       setShopOpen(false);
+      setLoginRewardsOpen(false);
       phaseRef.current = 'playing';
       syncBodyState('playing');
       setPhase('playing');
@@ -215,8 +243,13 @@ export default function App() {
     const nextRenderer = new KitchenRenderer();
     nextRenderer.setTheme(p.selectedTheme);
     rendererRef.current = nextRenderer;
+    rendererRef.current.setTutorialHighlight(null);
+    tutorialStepRef.current = null;
+    setTutorialStep(null);
+    setTutorialGuide(null);
     setHud(extractHudState(fresh));
     setShopOpen(false);
+    setLoginRewardsOpen(false);
     phaseRef.current = 'title';
     syncBodyState('title');
     setPhase('title');
@@ -284,6 +317,76 @@ export default function App() {
     kitchenAudio.play('achievement');
   }, []);
 
+  const handleOpenLoginRewards = useCallback(() => {
+    kitchenAudio.unlock();
+    clearInputs();
+    setLoginRewardsOpen(true);
+  }, [clearInputs]);
+
+  const handleCloseLoginRewards = useCallback(() => {
+    setLoginRewardsOpen(false);
+    wakeLoopRef.current?.();
+  }, []);
+
+  const handleClaimLoginReward = useCallback(() => {
+    const { next, claimed } = claimDailyLoginReward(progressRef.current);
+    if (!claimed) return;
+    saveProgress(next);
+    progressRef.current = next;
+    setProgress(next);
+    kitchenAudio.play('achievement');
+  }, []);
+
+  const finishTutorial = useCallback((awardBonus: boolean) => {
+    tutorialStepRef.current = null;
+    setTutorialStep(null);
+    setTutorialGuide(null);
+    rendererRef.current.setTutorialHighlight(null);
+    const { next, bonusAwarded } = completeTutorial(progressRef.current, awardBonus);
+    saveProgress(next);
+    progressRef.current = next;
+    setProgress(next);
+    if (bonusAwarded > 0) {
+      kitchenAudio.play('achievement');
+    }
+  }, []);
+
+  const handleTutorialNext = useCallback(() => {
+    const current = tutorialStepRef.current;
+    if (!current) return;
+    const nextStep = getNextTutorialStep(current);
+    if (nextStep) {
+      tutorialStepRef.current = nextStep;
+      setTutorialStep(nextStep);
+      const nextGuide = getTutorialGuideSnapshot(simRef.current, nextStep);
+      setTutorialGuide(nextGuide);
+      rendererRef.current.setTutorialHighlight(nextGuide);
+      kitchenAudio.play('coin');
+    } else {
+      finishTutorial(true);
+    }
+  }, [finishTutorial]);
+
+  const handleTutorialSkip = useCallback(() => {
+    finishTutorial(false);
+  }, [finishTutorial]);
+
+  const handleReplayTutorial = useCallback(() => {
+    const step: TutorialStepId = 'chop';
+    tutorialStepRef.current = step;
+    setTutorialStep(step);
+    const guide = getTutorialGuideSnapshot(simRef.current, step);
+    setTutorialGuide(guide);
+    rendererRef.current.setTutorialHighlight(guide);
+    clearInputs();
+    kitchenAudio.unlock();
+    phaseRef.current = 'playing';
+    syncBodyState('playing');
+    setPhase('playing');
+    wakeLoopRef.current?.();
+    canvasRef.current?.focus();
+  }, [clearInputs, syncBodyState]);
+
   const handleMobileDash = useCallback(() => {
     if (phaseRef.current !== 'playing') return;
     kitchenAudio.unlock();
@@ -299,6 +402,14 @@ export default function App() {
         if (code === 'Escape') {
           e.preventDefault();
           handleCloseShop();
+        }
+        return;
+      }
+
+      if (loginRewardsOpenRef.current) {
+        if (code === 'Escape') {
+          e.preventDefault();
+          handleCloseLoginRewards();
         }
         return;
       }
@@ -388,6 +499,7 @@ export default function App() {
     };
   }, [
     clearInputs,
+    handleCloseLoginRewards,
     handleCloseShop,
     handlePause,
     handleRestart,
@@ -403,6 +515,7 @@ export default function App() {
     let lastTime = performance.now();
     let hudAccumulator = 0;
     let lastSignature = '';
+    let lastTutorialSig = '';
 
     const drawFrame = (now: number) => {
       const canvas = canvasRef.current;
@@ -470,12 +583,49 @@ export default function App() {
         justInteractRef.current = false;
         justDashRef.current = false;
 
+        const tutorialActiveBeforeStep = tutorialStepRef.current !== null;
+        const savedTimeRemaining = sim.timeRemaining;
+
         const events = stepSimulation(sim, dt, {
           moveX: simMoveX,
           moveY: simMoveY,
           interactPressed,
           dashPressed,
         });
+
+        // Gently pause match countdown while new player walks through interactive tutorial
+        if (tutorialActiveBeforeStep && sim.outcome === 'none') {
+          sim.timeRemaining = savedTimeRemaining;
+        }
+
+        // Update live-reactive tutorial step & glowing canvas highlights
+        const activeTut = tutorialStepRef.current;
+        if (activeTut) {
+          if (shouldAutoAdvanceTutorial(sim, activeTut)) {
+            const nextStep = getNextTutorialStep(activeTut);
+            if (nextStep) {
+              tutorialStepRef.current = nextStep;
+              setTutorialStep(nextStep);
+              const nextGuide = getTutorialGuideSnapshot(sim, nextStep);
+              setTutorialGuide(nextGuide);
+              renderer.setTutorialHighlight(nextGuide);
+              kitchenAudio.play('coin');
+            } else {
+              finishTutorial(true);
+            }
+          } else {
+            const liveGuide = getTutorialGuideSnapshot(sim, activeTut);
+            renderer.setTutorialHighlight(liveGuide);
+            const tutSig = `${liveGuide.stepId}|${liveGuide.actionTag}|${liveGuide.instruction}`;
+            if (tutSig !== lastTutorialSig) {
+              lastTutorialSig = tutSig;
+              setTutorialGuide(liveGuide);
+            }
+          }
+        } else {
+          lastTutorialSig = '';
+          renderer.setTutorialHighlight(null);
+        }
 
         renderer.ingestEvents(events);
 
@@ -576,7 +726,7 @@ export default function App() {
       kitchenAudio.setSizzling(false);
       observer?.disconnect();
     };
-  }, [syncBodyState]);
+  }, [finishTutorial, syncBodyState]);
 
   const handleCanvasPointerDown = useCallback(
     (e: React.PointerEvent<HTMLCanvasElement>) => {
@@ -653,6 +803,7 @@ export default function App() {
             onSelectDuration={(sec) => setDurationSeconds(sec)}
             onStart={handleStartFromTitle}
             onOpenShop={handleOpenShop}
+            onOpenLoginRewards={handleOpenLoginRewards}
           />
         </div>
       )}
@@ -671,6 +822,16 @@ export default function App() {
         />
       )}
 
+      {/* Interactive Step-by-Step New Player Tutorial Overlay */}
+      {phase === 'playing' && !shopOpen && tutorialGuide && (
+        <TutorialOverlay
+          guide={tutorialGuide}
+          isMobile={viewport.isMobile}
+          onNext={handleTutorialNext}
+          onSkip={handleTutorialSkip}
+        />
+      )}
+
       {/* Left-Side Mobile Dash Trigger (tap kitchen directly to cook & serve) */}
       {phase === 'playing' && !shopOpen && viewport.isMobile && (
         <MobileControls
@@ -686,6 +847,7 @@ export default function App() {
         onResume={handleResume}
         onRestart={handleRestart}
         onOpenShop={handleOpenShop}
+        onReplayTutorial={handleReplayTutorial}
         onReturnTitle={handleReturnTitle}
       />
 
@@ -699,6 +861,14 @@ export default function App() {
         onClaimMission={handleClaimMission}
         onClaimAllClear={handleClaimAllClear}
         onClose={handleCloseShop}
+      />
+
+      {/* 7-Day Daily Login Rewards Modal */}
+      <LoginRewardsModal
+        open={loginRewardsOpen}
+        progress={progress}
+        onClaim={handleClaimLoginReward}
+        onClose={handleCloseLoginRewards}
       />
     </div>
   );

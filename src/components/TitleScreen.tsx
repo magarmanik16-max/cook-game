@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { getLoginRewardStatus } from '../game/loginRewards';
 import { getUnclaimedMissionCount } from '../game/missions';
 import {
   getDailySpecialForDay,
@@ -22,6 +23,7 @@ interface TitleScreenProps {
   onSelectDuration: (seconds: MatchDurationSeconds) => void;
   onStart: () => void;
   onOpenShop: (tab?: ShopTab) => void;
+  onOpenLoginRewards: () => void;
 }
 
 const TITLE_BG_SRC = '/src/assets/images/clay_bistro_title_bg_1794819813304.jpg';
@@ -42,6 +44,7 @@ export function TitleScreen({
   onSelectDuration,
   onStart,
   onOpenShop,
+  onOpenLoginRewards,
 }: TitleScreenProps) {
   const [imgFailed, setImgFailed] = useState(false);
   const dailySpecial = RECIPES[getDailySpecialForDay(progress.day)];
@@ -52,6 +55,7 @@ export function TitleScreen({
   });
   const unclaimedMissions = getUnclaimedMissionCount(progress.dailyMissions);
   const completedMissions = progress.dailyMissions.missions.filter((m) => m.completed).length;
+  const loginStatus = getLoginRewardStatus(progress.loginRewards);
 
   const ctaLabel = mode === 'challenge' ? 'Start Challenge' : 'Start Service';
 
@@ -109,6 +113,28 @@ export function TitleScreen({
 
           <div className="flex items-center gap-1.5">
             <PWAInstallButton compact />
+
+            <button
+              type="button"
+              data-testid="open-login-rewards-btn"
+              onClick={onOpenLoginRewards}
+              aria-label={
+                loginStatus.canClaimToday
+                  ? `Claim Day ${loginStatus.activeDay} login reward: +${loginStatus.todayTier.coins} coins`
+                  : 'View daily login rewards'
+              }
+              className={`clay-btn-soft relative px-2.5 py-1.5 rounded-2xl flex items-center gap-1 text-xs font-bold whitespace-nowrap cursor-pointer ${
+                loginStatus.canClaimToday
+                  ? 'bg-[#FFF3CC] ring-1 ring-[#F59E0B] text-[#92400E]'
+                  : 'bg-[#FFFBF7] text-[#6E5245]'
+              }`}
+            >
+              <svg viewBox="0 0 24 24" className="w-3.5 h-3.5 text-[#D97706] shrink-0" aria-hidden="true">
+                <rect x="4" y="9" width="16" height="11" rx="2" fill="none" stroke="currentColor" strokeWidth="2.1" />
+                <path d="M12 9 V20 M3 9 H21 M12 9 C10 5, 7 5, 7.5 7.5 C8 9, 12 9, 12 9 Z M12 9 C14 5, 17 5, 16.5 7.5 C16 9, 12 9, 12 9 Z" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              <span>{loginStatus.canClaimToday ? `+${loginStatus.todayTier.coins}` : `D${loginStatus.activeDay}`}</span>
+            </button>
 
             <button
               type="button"
@@ -580,6 +606,30 @@ export function TitleScreen({
                 }`}
               >
                 {unclaimedMissions > 0 ? `${unclaimedMissions} Ready` : `${completedMissions}/3`}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              data-testid="open-login-rewards-btn"
+              onClick={onOpenLoginRewards}
+              className={`clay-btn-soft px-4 py-3.5 text-sm sm:text-base rounded-2xl font-bold whitespace-nowrap shrink-0 cursor-pointer inline-flex items-center gap-2 ${
+                loginStatus.canClaimToday
+                  ? 'bg-[#FFF3CC] hover:bg-[#FFE8A3] ring-1 ring-[#F59E0B] text-[#78350F]'
+                  : 'bg-[#FFFBF7] hover:bg-[#FFF3E8] text-[#3D2921]'
+              }`}
+            >
+              <svg viewBox="0 0 24 24" className="w-4 h-4 text-[#D97706] shrink-0" aria-hidden="true">
+                <rect x="4" y="9" width="16" height="11" rx="2" fill="none" stroke="currentColor" strokeWidth="2.1" />
+                <path d="M12 9 V20 M3 9 H21 M12 9 C10 5, 7 5, 7.5 7.5 C8 9, 12 9, 12 9 Z M12 9 C14 5, 17 5, 16.5 7.5 C16 9, 12 9, 12 9 Z" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              <span>Daily Gift</span>
+              <span
+                className={`font-mono-num text-xs font-bold tabular-nums ${
+                  loginStatus.canClaimToday ? 'text-[#B45309]' : 'text-[#15803D]'
+                }`}
+              >
+                {loginStatus.canClaimToday ? `+${loginStatus.todayTier.coins}c` : `Day ${loginStatus.activeDay} ✓`}
               </span>
             </button>
 

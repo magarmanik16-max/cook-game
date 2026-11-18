@@ -27,6 +27,7 @@ import type {
   SimEvent,
   StationState,
 } from './types';
+import type { TutorialGuideSnapshot } from './tutorial';
 import { getViewportProfile } from './viewport';
 
 interface Particle {
@@ -141,9 +142,14 @@ export class KitchenRenderer {
   private shakeTrauma = 0;
   private ambientTimer = 0;
   private themeId: KitchenThemeId = 'copper';
+  private tutorialGuide: TutorialGuideSnapshot | null = null;
 
   public setTheme(themeId: KitchenThemeId): void {
     this.themeId = themeId;
+  }
+
+  public setTutorialHighlight(guide: TutorialGuideSnapshot | null): void {
+    this.tutorialGuide = guide;
   }
 
   public isPortraitLayout(width: number, height: number): boolean {
@@ -607,9 +613,153 @@ export class KitchenRenderer {
       this.drawChef(ctx, sim, T, portrait, timeNow, theme.apronAccent);
     }
     this.drawParticles(ctx, T, portrait);
+    this.drawTutorialHighlights(ctx, sim, T, portrait, timeNow);
     this.drawPopups(ctx, T, portrait);
 
     ctx.restore();
+  }
+
+  private drawTutorialHighlights(
+    ctx: CanvasRenderingContext2D,
+    sim: KitchenSimulation,
+    T: number,
+    portrait: boolean,
+    timeNow: number,
+  ): void {
+    const guide = this.tutorialGuide;
+    if (!guide) return;
+
+    const breathe = 0.5 + 0.5 * Math.sin(timeNow * 0.0048);
+    const wave1 = (timeNow * 0.00072) % 1;
+    const wave2 = (wave1 + 0.5) % 1;
+    const accent = guide.accentColor;
+
+    const drawGlowingTarget = (
+      cx: number,
+      cy: number,
+      radius: number,
+      primary: boolean,
+      badgeLabel: string | null,
+    ) => {
+      ctx.save();
+
+      // Soft warm breathing halo (zero-allocation concentric glow discs)
+      ctx.fillStyle = accent;
+      ctx.globalAlpha = primary ? 0.12 + breathe * 0.09 : 0.08 + breathe * 0.06;
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius * (primary ? 1.32 : 1.08), 0, Math.PI * 2);
+      ctx.fill();
+
+      if (primary) {
+        ctx.globalAlpha = 0.16 + breathe * 0.1;
+        ctx.beginPath();
+        ctx.arc(cx, cy, radius * 0.96, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      if (primary) {
+        // Two staggered subtle expanding pulse rings
+        for (const w of [wave1, wave2]) {
+          const r = radius * (0.72 + w * 0.72);
+          ctx.globalAlpha = (1 - w) * 0.65;
+          ctx.strokeStyle = accent;
+          ctx.lineWidth = Math.max(2, T * 0.042);
+          ctx.beginPath();
+          ctx.arc(cx, cy, r, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+
+        // Crisp inner breathing rim
+        ctx.globalAlpha = 0.58 + breathe * 0.34;
+        ctx.strokeStyle = '#FFFDF9';
+        ctx.lineWidth = Math.max(2, T * 0.036);
+        ctx.beginPath();
+        ctx.arc(cx, cy, radius * (0.72 + breathe * 0.06), 0, Math.PI * 2);
+        ctx.stroke();
+
+        // Gentle bobbing pointer chevron + label
+        if (badgeLabel) {
+          const bob = Math.sin(timeNow * 0.0062) * Math.max(3, T * 0.055);
+          const arrowTipY = cy - radius * 0.88 + bob;
+          ctx.globalAlpha = 0.96;
+
+          // Pill-free compact clay tag
+          const fontSize = Math.max(10, Math.round(T * 0.145));
+          ctx.font = `800 ${fontSize}px "Plus Jakarta Sans", sans-serif`;
+          const textW = ctx.measureText(badgeLabel).width;
+          const padX = Math.max(7, T * 0.1);
+          const tagW = textW + padX * 2;
+          const tagH = fontSize + 8;
+          const tagX = cx - tagW * 0.5;
+          const tagY = arrowTipY - tagH - 6;
+
+          ctx.fillStyle = accent;
+          this.roundRect(ctx, tagX, tagY, tagW, tagH, 7);
+          ctx.fill();
+          ctx.strokeStyle = '#FFFDF9';
+          ctx.lineWidth = 1.6;
+          ctx.stroke();
+
+          ctx.fillStyle = '#FFFFFF';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(badgeLabel, cx, tagY + tagH * 0.52);
+
+          // Downward triangle pointer
+          ctx.fillStyle = accent;
+          ctx.beginPath();
+          ctx.moveTo(cx - 5, arrowTipY - 6);
+          ctx.lineTo(cx + 5, arrowTipY - 6);
+          ctx.lineTo(cx, arrowTipY);
+          ctx.closePath();
+          ctx.fill();
+        }
+      } else {
+        // Secondary destination preview: soft dashed breathing ring
+        ctx.globalAlpha = 0.36 + breathe * 0.28;
+        ctx.strokeStyle = accent;
+        ctx.lineWidth = Math.max(1.8, T * 0.032);
+        ctx.setLineDash([5, 5]);
+        ctx.beginPath();
+        ctx.arc(cx, cy, radius * 0.78, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+
+      ctx.restore();
+    };
+
+    const primarySet = new Set(guide.primaryStationIds);
+    const secondarySet = new Set(guide.secondaryStationIds);
+
+    for (const st of sim.stations) {
+      const isPrimary = primarySet.has(st.id);
+      const isSecondary = !isPrimary && secondarySet.has(st.id);
+      if (!isPrimary && !isSecondary) continue;
+      const sc = this.toScreenGrid(st.col + 0.5, st.row + 0.5, portrait);
+      const label =
+        isPrimary && guide.primaryStationIds[0] === st.id
+          ? st.type === 'board'
+            ? 'CHOP'
+            : st.type === 'skillet'
+              ? 'COOK'
+              : st.type === 'plate_mat'
+                ? 'PLATE'
+                : 'TAP'
+          : null;
+      drawGlowingTarget(sc.x * T, sc.y * T, T * 0.62, isPrimary, label);
+    }
+
+    if (guide.highlightTicketIds.length > 0) {
+      const ticketSet = new Set(guide.highlightTicketIds);
+      let labeledFirst = false;
+      for (const ticket of sim.tickets) {
+        if (!ticketSet.has(ticket.id)) continue;
+        const seat = this.getSeatScreenCoord(ticket.seatIndex, T, portrait);
+        drawGlowingTarget(seat.x, seat.y, T * 0.64, true, labeledFirst ? null : 'SERVE');
+        labeledFirst = true;
+      }
+    }
   }
 
   private drawFloor(

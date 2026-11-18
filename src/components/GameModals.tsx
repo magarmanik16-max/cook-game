@@ -11,6 +11,7 @@ interface GameModalsProps {
   onResume: () => void;
   onRestart: () => void;
   onOpenShop: (tab?: ShopTab) => void;
+  onReplayTutorial?: () => void;
   onReturnTitle: () => void;
 }
 
@@ -25,6 +26,7 @@ export function GameModals({
   onResume,
   onRestart,
   onOpenShop,
+  onReplayTutorial,
   onReturnTitle,
 }: GameModalsProps) {
   if (phase !== 'paused' && phase !== 'gameover') return null;
@@ -222,13 +224,24 @@ export function GameModals({
           )}
 
           {isPaused ? (
-            <button
-              type="button"
-              onClick={onRestart}
-              className="clay-btn-soft px-4 py-2.5 rounded-2xl bg-[#FFFBF7] hover:bg-[#FFF3E8] text-[#3D2921] font-bold text-sm whitespace-nowrap shrink-0 cursor-pointer"
-            >
-              Restart
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={onRestart}
+                className="clay-btn-soft px-4 py-2.5 rounded-2xl bg-[#FFFBF7] hover:bg-[#FFF3E8] text-[#3D2921] font-bold text-sm whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                Restart
+              </button>
+              {onReplayTutorial && (
+                <button
+                  type="button"
+                  onClick={onReplayTutorial}
+                  className="clay-btn-soft px-4 py-2.5 rounded-2xl bg-[#FFF6E5] hover:bg-[#FFEDD0] text-[#92400E] font-bold text-sm whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  Tutorial
+                </button>
+              )}
+            </>
           ) : (
             <button
               type="button"

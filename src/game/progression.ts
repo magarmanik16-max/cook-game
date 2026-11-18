@@ -8,6 +8,10 @@ import type {
   UpgradeLevels,
 } from './types';
 import {
+  applyLoginRewardClaim,
+  createDefaultLoginRewardState,
+} from './loginRewards';
+import {
   applyMatchToDailyMissions,
   createDailyMissionState,
   DAILY_ALL_CLEAR_BONUS,
@@ -16,6 +20,7 @@ import {
   getTodayDateKey,
 } from './missions';
 import { RECIPE_LIST } from './recipes';
+import { TUTORIAL_COMPLETION_BONUS } from './tutorial';
 
 const STORAGE_KEY = 'copper_pan_progress_v2';
 const LEGACY_BEST_KEY = 'copper_pan_best_score';
@@ -198,6 +203,8 @@ export function createDefaultProgress(
     unlockedThemes: ['copper'],
     unlockedAchievements: [],
     dailyMissions: createDailyMissionState(dateKey),
+    loginRewards: createDefaultLoginRewardState(),
+    tutorialCompleted: false,
   };
 }
 
@@ -245,6 +252,27 @@ export function loadProgress(): PersistentProgress {
           ? parsed.unlockedAchievements
           : [],
         dailyMissions: ensureCurrentDailyMissions(parsed.dailyMissions),
+        loginRewards:
+          parsed.loginRewards && typeof parsed.loginRewards === 'object'
+            ? {
+                streakDay:
+                  typeof parsed.loginRewards.streakDay === 'number'
+                    ? Math.max(0, Math.min(7, Math.floor(parsed.loginRewards.streakDay)))
+                    : 0,
+                lastClaimDateKey:
+                  typeof parsed.loginRewards.lastClaimDateKey === 'string'
+                    ? parsed.loginRewards.lastClaimDateKey
+                    : null,
+                totalClaims:
+                  typeof parsed.loginRewards.totalClaims === 'number'
+                    ? Math.max(0, Math.floor(parsed.loginRewards.totalClaims))
+                    : 0,
+              }
+            : createDefaultLoginRewardState(),
+        tutorialCompleted:
+          typeof parsed.tutorialCompleted === 'boolean'
+            ? parsed.tutorialCompleted
+            : (typeof parsed.totalServed === 'number' && parsed.totalServed > 0),
       };
     }
 
@@ -393,6 +421,44 @@ export function claimDailyAllClearBonus(
         ...current,
         allClearClaimed: true,
       },
+    },
+  };
+}
+
+export function claimDailyLoginReward(
+  progress: PersistentProgress,
+  todayDateKey: string = getTodayDateKey(),
+): { next: PersistentProgress; claimed: boolean; reward: number; claimedDay: number } {
+  const { nextState, claimed, rewardCoins, claimedDay } = applyLoginRewardClaim(
+    progress.loginRewards,
+    todayDateKey,
+  );
+  if (!claimed) {
+    return { next: progress, claimed: false, reward: 0, claimedDay };
+  }
+  return {
+    claimed: true,
+    reward: rewardCoins,
+    claimedDay,
+    next: {
+      ...progress,
+      coins: progress.coins + rewardCoins,
+      loginRewards: nextState,
+    },
+  };
+}
+
+export function completeTutorial(
+  progress: PersistentProgress,
+  awardBonus = true,
+): { next: PersistentProgress; bonusAwarded: number } {
+  const bonus = !progress.tutorialCompleted && awardBonus ? TUTORIAL_COMPLETION_BONUS : 0;
+  return {
+    bonusAwarded: bonus,
+    next: {
+      ...progress,
+      coins: progress.coins + bonus,
+      tutorialCompleted: true,
     },
   };
 }

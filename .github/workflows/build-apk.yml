@@ -25,7 +25,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: 'npm'
 
       - name: Setup Java 21 (required by Android Gradle Plugin)
         uses: actions/setup-java@v4
@@ -34,7 +33,12 @@ jobs:
           java-version: '21'
 
       - name: Install dependencies
-        run: npm ci || npm install
+        run: |
+          if [ -f "package-lock.json" ]; then
+            npm ci
+          else
+            npm install --no-audit --no-fund
+          fi
 
       - name: Run unit tests & typecheck
         run: |
@@ -46,7 +50,7 @@ jobs:
 
       - name: Install Capacitor Android tooling
         run: |
-          npm install --no-save @capacitor/core@^7.0.0 @capacitor/cli@^7.0.0 @capacitor/android@^7.0.0
+          npm install --no-save --no-audit --no-fund @capacitor/core@^7.0.0 @capacitor/cli@^7.0.0 @capacitor/android@^7.0.0
 
       - name: Initialize & sync Capacitor Android project
         run: |
@@ -57,27 +61,24 @@ jobs:
 
       - name: Apply Copper Pan launcher icons
         run: |
-          if [ -f "public/pwa-512x512.png" ]; then
-            for dir in android/app/src/main/res/mipmap-*; do
-              if [ -d "$dir" ]; then
-                cp public/pwa-512x512.png "$dir/ic_launcher.png" || true
-                cp public/pwa-512x512.png "$dir/ic_launcher_round.png" || true
+          for density in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
+            dir="android/app/src/main/res/mipmap-${density}"
+            if [ -d "$dir" ]; then
+              if [ -f "public/pwa-512x512.png" ]; then
+                cp public/pwa-512x512.png "$dir/ic_launcher.png"
+                cp public/pwa-512x512.png "$dir/ic_launcher_round.png"
               fi
-            done
-          fi
-          if [ -f "public/pwa-maskable-512x512.png" ]; then
-            for dir in android/app/src/main/res/mipmap-*; do
-              if [ -d "$dir" ]; then
-                cp public/pwa-maskable-512x512.png "$dir/ic_launcher_foreground.png" || true
+              if [ -f "public/pwa-maskable-512x512.png" ]; then
+                cp public/pwa-maskable-512x512.png "$dir/ic_launcher_foreground.png"
               fi
-            done
-          fi
+            fi
+          done
 
       - name: Build Android APK (Debug — directly installable)
         working-directory: android
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug
+          ./gradlew assembleDebug --no-daemon
 
       - name: Prepare downloadable APK filename
         run: |
@@ -109,6 +110,6 @@ jobs:
 
             > Built automatically from commit `${{ github.sha }}`.
           files: release-artifacts/CopperPan.apk
-          make_latest: true
+          make_latest: 'true'
           draft: false
           prerelease: false

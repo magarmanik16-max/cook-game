@@ -44,6 +44,14 @@ export interface DailyMissionState {
   allClearClaimed: boolean;
 }
 
+export type TutorialStepId = 'chop' | 'cook' | 'plate' | 'serve';
+
+export interface LoginRewardState {
+  streakDay: number;
+  lastClaimDateKey: string | null;
+  totalClaims: number;
+}
+
 export interface PersistentProgress {
   coins: number;
   day: number;
@@ -56,6 +64,8 @@ export interface PersistentProgress {
   unlockedThemes: KitchenThemeId[];
   unlockedAchievements: AchievementId[];
   dailyMissions: DailyMissionState;
+  loginRewards: LoginRewardState;
+  tutorialCompleted: boolean;
 }
 
 export type IngredientBase =
