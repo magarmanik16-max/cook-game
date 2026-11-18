@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { getUnclaimedMissionCount } from '../game/missions';
 import {
   getDailySpecialForDay,
   getUpgradeCost,
@@ -9,6 +10,7 @@ import { RECIPES } from '../game/recipes';
 import type { GameMode, MatchDurationSeconds, PersistentProgress } from '../game/types';
 import type { ShopTab } from './BistroShopModal';
 import { CoinSvg, CopperPanTitleLockup, IngredientSvg } from './DishIcons';
+import { PWAInstallButton } from './PWAInstallButton';
 
 interface TitleScreenProps {
   mode: GameMode;
@@ -48,6 +50,8 @@ export function TitleScreen({
     const lvl = progress.upgrades[u.key] ?? 0;
     return lvl < u.maxLevel && progress.coins >= getUpgradeCost(u, lvl);
   });
+  const unclaimedMissions = getUnclaimedMissionCount(progress.dailyMissions);
+  const completedMissions = progress.dailyMissions.missions.filter((m) => m.completed).length;
 
   const ctaLabel = mode === 'challenge' ? 'Start Challenge' : 'Start Service';
 
@@ -103,20 +107,24 @@ export function TitleScreen({
             )}
           </div>
 
-          <button
-            type="button"
-            onClick={() => onOpenShop('upgrades')}
-            aria-label={`Bistro coins: ${progress.coins}. Open shop`}
-            className="clay-btn-soft bg-[#FFFBF7] hover:bg-[#FFF3E8] px-2.5 py-1.5 rounded-2xl flex items-center gap-1.5 cursor-pointer"
-          >
-            <CoinSvg className="w-4 h-4 shrink-0" />
-            <span className="font-mono-num text-xs font-bold text-[#B45309] tabular-nums">
-              {progress.coins}
-            </span>
-            <span className="w-4 h-4 rounded-full bg-[#C94136] text-white text-[11px] font-bold leading-none flex items-center justify-center">
-              +
-            </span>
-          </button>
+          <div className="flex items-center gap-1.5">
+            <PWAInstallButton compact />
+
+            <button
+              type="button"
+              onClick={() => onOpenShop('upgrades')}
+              aria-label={`Bistro coins: ${progress.coins}. Open shop`}
+              className="clay-btn-soft bg-[#FFFBF7] hover:bg-[#FFF3E8] px-2.5 py-1.5 rounded-2xl flex items-center gap-1.5 cursor-pointer"
+            >
+              <CoinSvg className="w-4 h-4 shrink-0" />
+              <span className="font-mono-num text-xs font-bold text-[#B45309] tabular-nums">
+                {progress.coins}
+              </span>
+              <span className="w-4 h-4 rounded-full bg-[#C94136] text-white text-[11px] font-bold leading-none flex items-center justify-center">
+                +
+              </span>
+            </button>
+          </div>
         </header>
 
         {isLandscapeMobile ? (
@@ -209,11 +217,23 @@ export function TitleScreen({
                 {ctaLabel}
               </button>
 
-              <div className="grid grid-cols-3 gap-1.5">
+              <div className="grid grid-cols-4 gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => onOpenShop('missions')}
+                  className="clay-btn-soft relative rounded-xl bg-[#FFF6EC] py-2 px-1 flex flex-col items-center gap-0.5 text-[10px] font-bold text-[#3D2921] cursor-pointer whitespace-nowrap"
+                >
+                  {unclaimedMissions > 0 && (
+                    <span className="absolute top-1 right-1 px-1 rounded-full bg-[#16A34A] text-white text-[8px] font-bold leading-tight">
+                      {unclaimedMissions}
+                    </span>
+                  )}
+                  <span>Missions</span>
+                </button>
                 <button
                   type="button"
                   onClick={() => onOpenShop('upgrades')}
-                  className="clay-btn-soft relative rounded-xl bg-[#FFF6EC] py-2 px-1 flex flex-col items-center gap-0.5 text-[10px] font-bold text-[#3D2921] cursor-pointer"
+                  className="clay-btn-soft relative rounded-xl bg-[#FFF6EC] py-2 px-1 flex flex-col items-center gap-0.5 text-[10px] font-bold text-[#3D2921] cursor-pointer whitespace-nowrap"
                 >
                   {hasAffordableUpgrade && (
                     <span className="absolute top-1 right-1.5 w-2 h-2 rounded-full bg-[#F59E0B]" />
@@ -223,14 +243,14 @@ export function TitleScreen({
                 <button
                   type="button"
                   onClick={() => onOpenShop('themes')}
-                  className="clay-btn-soft rounded-xl bg-[#FFF6EC] py-2 px-1 flex flex-col items-center gap-0.5 text-[10px] font-bold text-[#3D2921] cursor-pointer"
+                  className="clay-btn-soft rounded-xl bg-[#FFF6EC] py-2 px-1 flex flex-col items-center gap-0.5 text-[10px] font-bold text-[#3D2921] cursor-pointer whitespace-nowrap"
                 >
                   <span>Themes</span>
                 </button>
                 <button
                   type="button"
                   onClick={() => onOpenShop('recipes')}
-                  className="clay-btn-soft rounded-xl bg-[#FFF6EC] py-2 px-1 flex flex-col items-center gap-0.5 text-[10px] font-bold text-[#3D2921] cursor-pointer"
+                  className="clay-btn-soft rounded-xl bg-[#FFF6EC] py-2 px-1 flex flex-col items-center gap-0.5 text-[10px] font-bold text-[#3D2921] cursor-pointer whitespace-nowrap"
                 >
                   <span>Recipes</span>
                 </button>
@@ -338,28 +358,54 @@ export function TitleScreen({
                   {ctaLabel}
                 </button>
 
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-4 gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => onOpenShop('missions')}
+                    className="clay-btn-soft relative rounded-2xl bg-[#FFF6EC] hover:bg-[#FFF0DF] py-2 px-1 flex flex-col items-center gap-1 text-[#3D2921] cursor-pointer"
+                  >
+                    {unclaimedMissions > 0 && (
+                      <span
+                        aria-label={`${unclaimedMissions} mission rewards ready`}
+                        className="absolute top-1 right-1.5 px-1 rounded-full bg-[#16A34A] text-white text-[9px] font-bold leading-tight"
+                      >
+                        {unclaimedMissions}
+                      </span>
+                    )}
+                    <svg viewBox="0 0 24 24" className="w-4 h-4 text-[#16A34A]" aria-hidden="true">
+                      <path
+                        d="M9 12 L11 14 L15.5 9.5 M6 4 H18 A2 2 0 0 1 20 6 V18 A2 2 0 0 1 18 20 H6 A2 2 0 0 1 4 18 V6 A2 2 0 0 1 6 4 Z"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2.1"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                    <span className="text-[10px] font-bold leading-none whitespace-nowrap">Missions</span>
+                  </button>
+
                   <button
                     type="button"
                     onClick={() => onOpenShop('upgrades')}
-                    className="clay-btn-soft relative rounded-2xl bg-[#FFF6EC] hover:bg-[#FFF0DF] py-2 px-2 flex flex-col items-center gap-1 text-[#3D2921] cursor-pointer"
+                    className="clay-btn-soft relative rounded-2xl bg-[#FFF6EC] hover:bg-[#FFF0DF] py-2 px-1 flex flex-col items-center gap-1 text-[#3D2921] cursor-pointer"
                   >
                     {hasAffordableUpgrade && (
                       <span
                         aria-label="Upgrade available"
-                        className="absolute top-1.5 right-2 w-2 h-2 rounded-full bg-[#F59E0B]"
+                        className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-[#F59E0B]"
                       />
                     )}
                     <svg viewBox="0 0 24 24" className="w-4 h-4 text-[#C94136]" aria-hidden="true">
                       <path d="M12 4 V20 M5 11 L12 4 L19 11" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round" />
                     </svg>
-                    <span className="text-[11px] font-bold leading-none">Upgrades</span>
+                    <span className="text-[10px] font-bold leading-none whitespace-nowrap">Upgrades</span>
                   </button>
 
                   <button
                     type="button"
                     onClick={() => onOpenShop('themes')}
-                    className="clay-btn-soft rounded-2xl bg-[#FFF6EC] hover:bg-[#FFF0DF] py-2 px-2 flex flex-col items-center gap-1 text-[#3D2921] cursor-pointer"
+                    className="clay-btn-soft rounded-2xl bg-[#FFF6EC] hover:bg-[#FFF0DF] py-2 px-1 flex flex-col items-center gap-1 text-[#3D2921] cursor-pointer"
                   >
                     <svg viewBox="0 0 24 24" className="w-4 h-4 text-[#D97706]" aria-hidden="true">
                       <circle cx="12" cy="12" r="7.5" fill="none" stroke="currentColor" strokeWidth="2.1" />
@@ -367,19 +413,19 @@ export function TitleScreen({
                       <circle cx="14.5" cy="10" r="1.4" fill="currentColor" />
                       <circle cx="12" cy="14.5" r="1.4" fill="currentColor" />
                     </svg>
-                    <span className="text-[11px] font-bold leading-none">Themes</span>
+                    <span className="text-[10px] font-bold leading-none whitespace-nowrap">Themes</span>
                   </button>
 
                   <button
                     type="button"
                     onClick={() => onOpenShop('recipes')}
-                    className="clay-btn-soft rounded-2xl bg-[#FFF6EC] hover:bg-[#FFF0DF] py-2 px-2 flex flex-col items-center gap-1 text-[#3D2921] cursor-pointer"
+                    className="clay-btn-soft rounded-2xl bg-[#FFF6EC] hover:bg-[#FFF0DF] py-2 px-1 flex flex-col items-center gap-1 text-[#3D2921] cursor-pointer"
                   >
                     <svg viewBox="0 0 24 24" className="w-4 h-4 text-[#15803D]" aria-hidden="true">
                       <rect x="5" y="4" width="14" height="16" rx="2.5" fill="none" stroke="currentColor" strokeWidth="2.1" />
                       <path d="M9 9 H15 M9 13 H15 M9 17 H12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
                     </svg>
-                    <span className="text-[11px] font-bold leading-none">Recipes</span>
+                    <span className="text-[10px] font-bold leading-none whitespace-nowrap">Recipes</span>
                   </button>
                 </div>
 
@@ -508,7 +554,7 @@ export function TitleScreen({
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-3 pt-1 w-auto">
+          <div className="flex flex-wrap items-center gap-2.5 pt-1 w-auto">
             <button
               type="button"
               data-start="true"
@@ -524,11 +570,28 @@ export function TitleScreen({
 
             <button
               type="button"
+              onClick={() => onOpenShop('missions')}
+              className="clay-btn-soft px-4 py-3.5 text-sm sm:text-base rounded-2xl bg-[#FFF6E5] hover:bg-[#FFEDD0] text-[#3D2921] font-bold whitespace-nowrap shrink-0 cursor-pointer inline-flex items-center gap-2"
+            >
+              <span>Daily Missions</span>
+              <span
+                className={`font-mono-num text-xs font-bold tabular-nums ${
+                  unclaimedMissions > 0 ? 'text-[#15803D]' : 'text-[#6E5245]'
+                }`}
+              >
+                {unclaimedMissions > 0 ? `${unclaimedMissions} Ready` : `${completedMissions}/3`}
+              </span>
+            </button>
+
+            <button
+              type="button"
               onClick={() => onOpenShop('upgrades')}
-              className="clay-btn-soft px-5 py-3.5 text-base rounded-2xl bg-[#FFFBF7] hover:bg-[#FFF3E8] text-[#3D2921] font-bold whitespace-nowrap shrink-0 cursor-pointer"
+              className="clay-btn-soft px-5 py-3.5 text-sm sm:text-base rounded-2xl bg-[#FFFBF7] hover:bg-[#FFF3E8] text-[#3D2921] font-bold whitespace-nowrap shrink-0 cursor-pointer"
             >
               Upgrades &amp; Style
             </button>
+
+            <PWAInstallButton />
 
             {progress.bestScore > 0 && (
               <div className="flex flex-col pl-1">

@@ -8,6 +8,14 @@ import {
   NAV_CLEARANCE,
 } from './pathfinding';
 import {
+  DAILY_ALL_CLEAR_BONUS,
+  DAILY_MISSION_CATALOG,
+  ensureCurrentDailyMissions,
+  pickDailyMissionIds,
+} from './missions';
+import {
+  claimDailyAllClearBonus,
+  claimDailyMission,
   createDefaultProgress,
   finalizeShiftProgress,
   purchaseUpgrade,
@@ -398,6 +406,101 @@ test('Bot Challenge mode: Rival Chef Coco autonomously cooks & serves customers 
   stepSimulation(drawSim, 0.04, IDLE_INPUT);
   assert.equal(drawSim.outcome, 'draw');
 });
+
+test('daily missions rotate by date, track salad & zero-burn goals accurately, and pay claimable coin rewards', () => {
+  const day1 = '2026-11-17';
+  const day2 = '2026-11-18';
+  const idsDay1 = pickDailyMissionIds(day1);
+  const idsDay2 = pickDailyMissionIds(day2);
+  assert.equal(idsDay1.length, 3);
+  assert.deepEqual(idsDay1, ['serve_salads', 'no_burn_match', 'serve_customers']);
+  assert.notDeepEqual(idsDay1, idsDay2, 'Next calendar day should rotate to fresh daily missions');
+
+  let prog = createDefaultProgress(0, day1);
+
+  // Match 1: burned 1 dish -> should NOT complete no_burn_match, but should add 2 salads & 4 customers
+  const m1 = finalizeShiftProgress(prog, {
+    score: 500,
+    coinsEarned: 30,
+    ordersServed: 4,
+    perfectDishes: 1,
+    maxCombo: 2,
+    burntCount: 1,
+    servedByDish: { garden_bowl: 2, bruschetta: 2 },
+    dateKey: day1,
+  });
+  prog = m1.nextProgress;
+  assert.equal(m1.newlyCompletedMissions.length, 0);
+  assert.equal(prog.dailyMissions.missions[0].progress, 2);
+  assert.equal(prog.dailyMissions.missions[1].completed, false, 'Burning a dish must fail zero-burn mission');
+  assert.equal(prog.dailyMissions.missions[2].progress, 4);
+
+  // Match 2: 0 burnt dishes, 3 more salads (garden_bowl + avo_bowl), 6 customers -> completes all 3!
+  const m2 = finalizeShiftProgress(prog, {
+    score: 900,
+    coinsEarned: 40,
+    ordersServed: 6,
+    perfectDishes: 2,
+    maxCombo: 4,
+    burntCount: 0,
+    servedByDish: { garden_bowl: 2, avo_bowl: 1, avo_toast: 3 },
+    dateKey: day1,
+  });
+  prog = m2.nextProgress;
+  assert.deepEqual(m2.newlyCompletedMissions, ['serve_salads', 'no_burn_match', 'serve_customers']);
+
+  const coinsBeforeClaims = prog.coins;
+  const claimSalad = claimDailyMission(prog, 'serve_salads', day1);
+  assert.equal(claimSalad.claimed, true);
+  assert.equal(claimSalad.reward, DAILY_MISSION_CATALOG.serve_salads.coinReward);
+  prog = claimSalad.next;
+  assert.equal(prog.coins, coinsBeforeClaims + DAILY_MISSION_CATALOG.serve_salads.coinReward);
+
+  // Double-claiming must be rejected
+  const doubleClaim = claimDailyMission(prog, 'serve_salads', day1);
+  assert.equal(doubleClaim.claimed, false);
+  assert.equal(doubleClaim.reward, 0);
+
+  // Claiming Daily All-Clear Bonus awards +50c once
+  const allClear = claimDailyAllClearBonus(prog, day1);
+  assert.equal(allClear.claimed, true);
+  assert.equal(allClear.reward, DAILY_ALL_CLEAR_BONUS);
+  prog = allClear.next;
+  assert.equal(claimDailyAllClearBonus(prog, day1).claimed, false);
+
+  // Next day resets cleanly
+  const rolled = ensureCurrentDailyMissions(prog.dailyMissions, day2);
+  assert.equal(rolled.dateKey, day2);
+  assert.equal(rolled.missions.every((m) => m.progress === 0 && !m.completed && !m.claimed), true);
+});
+
+test('high combos (3x+) emit celebratory combo_burst particle and flourish events and record servedByDish', () => {
+  const sim = createInitialSimulation('solo', 0, { durationSeconds: 60 });
+  sim.combo = 2; // Next serve reaches 3x combo!
+  const ticket = sim.tickets[0];
+  assert.ok(ticket);
+
+  const bruschettaPlate: HeldItem = {
+    kind: 'plate',
+    isPerfect: false,
+    matchedDishId: ticket.dishId,
+    plateComponents: [{ kind: 'bun', isPerfect: false }, { kind: 'tomato_chopped', isPerfect: false }],
+  };
+  sim.chef.held = bruschettaPlate;
+
+  const events: SimEvent[] = [];
+  const ok = serveCustomerTicket(sim, ticket.id, events);
+  assert.equal(ok, true);
+  assert.equal(sim.combo, 3);
+  assert.equal(sim.servedByDish[ticket.dishId], 1);
+
+  const comboEvent = events.find((e) => e.particleKind === 'combo_burst');
+  assert.ok(comboEvent, 'Serving at 3x combo should emit a combo_burst event');
+  assert.equal(comboEvent.comboLevel, 3);
+  assert.ok((comboEvent.particleCount ?? 0) >= 22);
+  assert.ok(comboEvent.floatingText?.includes('3x'));
+});
+
 
 
 

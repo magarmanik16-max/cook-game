@@ -16,6 +16,8 @@ export interface HudState {
   score: number;
   coinsEarned: number;
   combo: number;
+  comboTimer: number;
+  comboMaxWindow: number;
   ordersServed: number;
   botOrdersServed: number;
   botScore: number;
@@ -75,6 +77,21 @@ export function GameHud({
   const isFinalCountdown = hud.timeRemaining > 0 && hud.timeRemaining <= 10;
   const hasCriticalOrder =
     isFinalCountdown || hud.tickets.some((t) => t.patience <= URGENT_ALARM_SECONDS);
+  const isHighCombo = hud.combo >= 3;
+  const isSuperCombo = hud.combo >= 5;
+  const comboMultiplier = Math.min(3.0, 1 + Math.max(0, hud.combo - 1) * 0.25);
+  const comboTimerRatio =
+    hud.combo >= 2 && hud.comboMaxWindow > 0
+      ? Math.max(0, Math.min(1, hud.comboTimer / hud.comboMaxWindow))
+      : 0;
+  const comboTierTitle =
+    hud.combo >= 7
+      ? 'UNSTOPPABLE!'
+      : hud.combo >= 5
+        ? 'MASTER CHEF!'
+        : hud.combo >= 4
+          ? 'SIZZLING!'
+          : 'ON FIRE!';
   const isPortraitMobile = isMobile && !isLandscapeMobile;
   const isChallenge = hud.mode === 'challenge';
 
@@ -90,12 +107,62 @@ export function GameHud({
         isLandscapeMobile ? 'px-3 py-1.5' : 'p-2 sm:p-4'
       }`}
     >
-      {/* Subtle Screen-Edge Urgent Alarm Vignette */}
-      {hasCriticalOrder && (
+      {/* Subtle Screen-Edge Urgent Alarm Vignette OR Warm Golden High-Combo Glow */}
+      {hasCriticalOrder ? (
         <div
           aria-hidden="true"
           className="fixed inset-0 pointer-events-none shadow-[inset_0_0_54px_rgba(225,29,72,0.32)] animate-pulse"
         />
+      ) : hud.combo >= 4 ? (
+        <div
+          aria-hidden="true"
+          data-testid="combo-vignette"
+          className={`fixed inset-0 pointer-events-none anim-combo-edge ${
+            isSuperCombo
+              ? 'shadow-[inset_0_0_72px_rgba(245,158,11,0.42)]'
+              : 'shadow-[inset_0_0_52px_rgba(234,88,12,0.28)]'
+          }`}
+        />
+      ) : null}
+
+      {/* High-Combo Screen-Space Celebratory Flourish Banner (3x+ streaks) */}
+      {isHighCombo && (
+        <div
+          key={`combo-flourish-${hud.combo}`}
+          data-testid="combo-flourish"
+          aria-live="polite"
+          className={`fixed left-1/2 -translate-x-1/2 pointer-events-none z-20 ${
+            isLandscapeMobile ? 'top-11' : isPortraitMobile ? 'top-14' : 'top-20'
+          }`}
+        >
+          <div
+            className={`anim-combo-banner clay-card-sm px-3.5 sm:px-4 py-1.5 flex items-center gap-2 border-2 ${
+              isSuperCombo
+                ? 'bg-[#FEF3C7] border-[#F59E0B] text-[#78350F]'
+                : 'bg-[#FFF4EB] border-[#E3574B] text-[#9A3412]'
+            }`}
+          >
+            <svg
+              viewBox="0 0 24 24"
+              className="w-4 h-4 sm:w-5 sm:h-5 shrink-0 anim-combo-star text-[#F59E0B]"
+              aria-hidden="true"
+            >
+              <path
+                d="M12 2 L14.8 8.2 L21.5 9 L16.5 13.6 L17.9 20.3 L12 17 L6.1 20.3 L7.5 13.6 L2.5 9 L9.2 8.2 Z"
+                fill="currentColor"
+                stroke="#B45309"
+                strokeWidth="1.5"
+                strokeLinejoin="round"
+              />
+            </svg>
+            <span className="font-display font-bold text-xs sm:text-sm whitespace-nowrap tracking-wide">
+              {hud.combo}x {comboTierTitle}
+            </span>
+            <span className="font-mono-num text-[11px] sm:text-xs font-bold tabular-nums opacity-85 whitespace-nowrap">
+              {comboMultiplier.toFixed(2).replace(/\.00$/, '')}x pts
+            </span>
+          </div>
+        </div>
       )}
 
       {/* Top Perimeter Row: Countdown Timer + Score / VS Bot Ledger + Utility Buttons */}
@@ -243,16 +310,30 @@ export function GameHud({
                 isPortraitMobile ? 'pl-1.5' : 'pl-2 sm:pl-2.5'
               }`}
             >
-              <span className="text-[9px] sm:text-[11px] font-semibold text-[#C94136] leading-none whitespace-nowrap">
-                Streak
+              <span
+                className={`text-[9px] sm:text-[11px] font-bold leading-none whitespace-nowrap ${
+                  isSuperCombo ? 'text-[#B45309]' : 'text-[#C94136]'
+                }`}
+              >
+                {isHighCombo ? 'Hot Streak' : 'Streak'}
               </span>
               <span
-                className={`font-mono-num font-bold text-[#C94136] leading-tight tabular-nums mt-0.5 sm:mt-0 ${
-                  isLandscapeMobile ? 'text-sm' : isMobile ? 'text-xs' : 'text-xl'
-                }`}
+                data-testid="hud-combo"
+                className={`font-mono-num font-bold leading-tight tabular-nums mt-0.5 sm:mt-0 inline-flex items-center gap-0.5 ${
+                  isSuperCombo ? 'text-[#D97706]' : 'text-[#C94136]'
+                } ${isLandscapeMobile ? 'text-sm' : isMobile ? 'text-xs' : 'text-xl'}`}
               >
                 {hud.combo}x
               </span>
+              <div className="w-8 sm:w-11 h-1 rounded-full bg-[#EAD8C8] overflow-hidden mt-0.5">
+                <div
+                  className="h-full rounded-full transition-transform duration-150 origin-left"
+                  style={{
+                    transform: `scaleX(${comboTimerRatio})`,
+                    backgroundColor: isSuperCombo ? '#F59E0B' : '#E3574B',
+                  }}
+                />
+              </div>
             </div>
           )}
         </div>

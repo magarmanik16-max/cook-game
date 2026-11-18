@@ -338,6 +338,8 @@ export function createInitialSimulation(
     ordersServed: 0,
     perfectDishes: 0,
     burntCount: 0,
+    servedByDish: {},
+    vipOrFoodieServed: 0,
     wave: 1,
     elapsedSeconds: 0,
     spawnTimer: isChallenge ? 3.8 : 5.5,
@@ -838,6 +840,10 @@ export function serveCustomerTicket(
   sim.maxCombo = Math.max(sim.maxCombo, sim.combo);
   sim.comboTimer = COMBO_WINDOW;
   sim.ordersServed += 1;
+  sim.servedByDish[dishId] = (sim.servedByDish[dishId] ?? 0) + 1;
+  if (ticket.variety === 'vip' || ticket.variety === 'foodie') {
+    sim.vipOrFoodieServed += 1;
+  }
   if (perfectCount > 0) sim.perfectDishes += 1;
 
   const gained = calculateServeScore(
@@ -895,10 +901,12 @@ export function serveCustomerTicket(
   sim.statusBanner = `${varietyTag} ${recipe.shortName} · +${gained} · +${coins} Coins`;
   sim.statusBannerTimer = 2.4;
 
+  const isHighCombo = sim.combo >= 3;
+  const comboTierBonus = Math.min(4, Math.max(0, sim.combo - 2));
   events.push({
     sound: 'serve',
-    hitstop: 0.045,
-    shakeTrauma: 0.25,
+    hitstop: isHighCombo ? 0.055 : 0.045,
+    shakeTrauma: isHighCombo ? Math.min(0.45, 0.28 + comboTierBonus * 0.04) : 0.25,
     particleKind: 'serve',
     particleX: seatPos.x,
     particleY: seatPos.y - 0.3,
@@ -909,6 +917,29 @@ export function serveCustomerTicket(
     floatingX: seatPos.x,
     floatingY: seatPos.y - 0.65,
   });
+
+  if (isHighCombo) {
+    const comboLabel =
+      sim.combo >= 7
+        ? `${sim.combo}x UNSTOPPABLE!`
+        : sim.combo >= 5
+          ? `${sim.combo}x MASTER CHEF!`
+          : sim.combo >= 4
+            ? `${sim.combo}x SIZZLING!`
+            : `${sim.combo}x ON FIRE!`;
+    events.push({
+      particleKind: 'combo_burst',
+      particleX: seatPos.x,
+      particleY: seatPos.y - 0.35,
+      particleColor: sim.combo >= 5 ? '#F59E0B' : '#E3574B',
+      particleCount: 22 + comboTierBonus * 8,
+      comboLevel: sim.combo,
+      floatingText: comboLabel,
+      floatingColor: sim.combo >= 5 ? '#FDE047' : '#FB923C',
+      floatingX: chef.x,
+      floatingY: chef.y - 0.72,
+    });
+  }
   events.push({ sound: 'coin' });
 
   if (sim.tickets.length === 0 || (sim.mode === 'challenge' && sim.tickets.length < 2)) {
@@ -1540,6 +1571,7 @@ export function stepSimulation(
 export function createStatsSnapshot(
   sim: KitchenSimulation,
   newlyUnlockedAchievements: RunStatsSnapshot['newlyUnlockedAchievements'] = [],
+  newlyCompletedMissions: RunStatsSnapshot['newlyCompletedMissions'] = [],
 ): RunStatsSnapshot {
   return {
     score: Math.round(sim.score),
@@ -1550,6 +1582,7 @@ export function createStatsSnapshot(
     botOrdersServed: sim.bot?.ordersServed ?? 0,
     botScore: Math.round(sim.bot?.score ?? 0),
     perfectDishes: sim.perfectDishes,
+    burntCount: sim.burntCount,
     maxCombo: sim.maxCombo,
     elapsedSeconds: Math.round(sim.elapsedSeconds),
     wave: sim.wave,
@@ -1557,5 +1590,6 @@ export function createStatsSnapshot(
     mode: sim.mode,
     dailySpecialDishId: sim.dailySpecialDishId,
     newlyUnlockedAchievements,
+    newlyCompletedMissions,
   };
 }

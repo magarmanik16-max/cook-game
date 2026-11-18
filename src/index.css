@@ -156,3 +156,290 @@
   display: none;
 }
 
+/* High-Combo Screen-Space Flourishes (compositor-only) */
+@keyframes comboBannerPop {
+  0% {
+    opacity: 0;
+    transform: translateY(-10px) scale(0.76);
+  }
+  16% {
+    opacity: 1;
+    transform: translateY(0) scale(1.06);
+  }
+  26% {
+    transform: translateY(0) scale(1);
+  }
+  82% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.94);
+  }
+}
+
+@keyframes comboStarSpin {
+  0%, 100% {
+    transform: scale(0.9) rotate(-10deg);
+  }
+  50% {
+    transform: scale(1.16) rotate(12deg);
+  }
+}
+
+@keyframes comboEdgePulse {
+  0%, 100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 0.85;
+  }
+}
+
+.anim-combo-banner {
+  animation: comboBannerPop 1.85s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.anim-combo-star {
+  animation: comboStarSpin 0.9s ease-in-out infinite;
+}
+
+.anim-combo-edge {
+  animation: comboEdgePulse 1.3s ease-in-out infinite;
+}
+
+/* Looping GIF-style Shop Preview Animations (compositor-only transform/opacity) */
+@keyframes gifChefDash {
+  0% {
+    transform: translateX(-28px) scaleX(1.08) scaleY(0.93);
+  }
+  42% {
+    transform: translateX(26px) scaleX(1.14) scaleY(0.88);
+  }
+  50% {
+    transform: translateX(26px) scaleX(0.92) scaleY(1.08);
+  }
+  92% {
+    transform: translateX(-28px) scaleX(1.1) scaleY(0.9);
+  }
+  100% {
+    transform: translateX(-28px) scaleX(1) scaleY(1);
+  }
+}
+
+@keyframes gifWhoosh {
+  0% {
+    opacity: 0;
+    transform: translateX(10px) scaleX(0.5);
+  }
+  30% {
+    opacity: 0.9;
+  }
+  70% {
+    opacity: 0;
+    transform: translateX(-18px) scaleX(1.25);
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(-18px) scaleX(1.25);
+  }
+}
+
+@keyframes gifKnifeChop {
+  0%, 100% {
+    transform: translateY(-6px) rotate(-18deg);
+  }
+  35% {
+    transform: translateY(5px) rotate(6deg);
+  }
+  50% {
+    transform: translateY(-7px) rotate(-20deg);
+  }
+  80% {
+    transform: translateY(5px) rotate(6deg);
+  }
+}
+
+@keyframes gifChopChip {
+  0%, 28% {
+    opacity: 0;
+    transform: translate(0, 0) scale(0.5);
+  }
+  42% {
+    opacity: 1;
+    transform: translate(8px, -11px) scale(1);
+  }
+  78% {
+    opacity: 0;
+    transform: translate(15px, -3px) scale(0.6);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(15px, -3px) scale(0.6);
+  }
+}
+
+@keyframes gifSearGauge {
+  0% {
+    transform: translateX(-22px);
+  }
+  45%, 78% {
+    transform: translateX(6px);
+  }
+  100% {
+    transform: translateX(-22px);
+  }
+}
+
+@keyframes gifSteamRise {
+  0% {
+    opacity: 0;
+    transform: translateY(6px) scale(0.8);
+  }
+  35% {
+    opacity: 0.85;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-12px) scale(1.1);
+  }
+}
+
+@keyframes gifLampPulse {
+  0%, 100% {
+    opacity: 0.55;
+    transform: scale(0.96);
+  }
+  50% {
+    opacity: 0.95;
+    transform: scale(1.05);
+  }
+}
+
+@keyframes gifHeartFloat {
+  0% {
+    opacity: 0;
+    transform: translateY(6px) scale(0.75);
+  }
+  35% {
+    opacity: 1;
+    transform: translateY(-3px) scale(1.06);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-15px) scale(0.9);
+  }
+}
+
+@keyframes gifGarnishDrop {
+  0% {
+    opacity: 0;
+    transform: translateY(-16px) rotate(-15deg);
+  }
+  35% {
+    opacity: 1;
+    transform: translateY(0px) rotate(0deg);
+  }
+  75% {
+    opacity: 1;
+    transform: translateY(0px) rotate(0deg);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(2px) rotate(8deg);
+  }
+}
+
+@keyframes gifCoinPop {
+  0%, 30% {
+    opacity: 0;
+    transform: translateY(6px) scale(0.5);
+  }
+  55% {
+    opacity: 1;
+    transform: translateY(-10px) scale(1.1);
+  }
+  95%, 100% {
+    opacity: 0;
+    transform: translateY(-20px) scale(0.85);
+  }
+}
+
+@keyframes themeChefBob {
+  0%, 100% {
+    transform: translate(0, 0);
+  }
+  50% {
+    transform: translate(6px, -3px);
+  }
+}
+
+.anim-gif-dash {
+  animation: gifChefDash 1.9s cubic-bezier(0.37, 0, 0.63, 1) infinite;
+}
+
+.anim-gif-whoosh {
+  animation: gifWhoosh 0.95s ease-out infinite;
+}
+
+.anim-gif-knife {
+  transform-box: fill-box;
+  transform-origin: 78% 72%;
+  animation: gifKnifeChop 1.15s ease-in-out infinite;
+}
+
+.anim-gif-chip {
+  animation: gifChopChip 1.15s ease-out infinite;
+}
+
+.anim-gif-gauge {
+  animation: gifSearGauge 2.2s ease-in-out infinite;
+}
+
+.anim-gif-steam {
+  animation: gifSteamRise 1.6s ease-out infinite;
+}
+
+.anim-gif-lamp {
+  transform-box: fill-box;
+  transform-origin: 50% 10%;
+  animation: gifLampPulse 1.8s ease-in-out infinite;
+}
+
+.anim-gif-heart {
+  animation: gifHeartFloat 1.8s ease-out infinite;
+}
+
+.anim-gif-garnish {
+  animation: gifGarnishDrop 1.8s ease-in-out infinite;
+}
+
+.anim-gif-coin {
+  animation: gifCoinPop 1.8s ease-out infinite;
+}
+
+.anim-theme-bob {
+  animation: themeChefBob 2.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .anim-combo-banner,
+  .anim-combo-star,
+  .anim-combo-edge,
+  .anim-gif-dash,
+  .anim-gif-whoosh,
+  .anim-gif-knife,
+  .anim-gif-chip,
+  .anim-gif-gauge,
+  .anim-gif-steam,
+  .anim-gif-lamp,
+  .anim-gif-heart,
+  .anim-gif-garnish,
+  .anim-gif-coin,
+  .anim-theme-bob {
+    animation: none !important;
+  }
+}
+
+

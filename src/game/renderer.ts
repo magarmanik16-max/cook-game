@@ -39,6 +39,19 @@ interface Particle {
   maxLife: number;
   size: number;
   color: string;
+  shape: 'circle' | 'star' | 'confetti';
+  rot: number;
+  vrot: number;
+}
+
+interface ComboShockwave {
+  active: boolean;
+  x: number;
+  y: number;
+  life: number;
+  maxLife: number;
+  color: string;
+  maxRadius: number;
 }
 
 interface FloatingPopup {
@@ -70,9 +83,12 @@ export interface KitchenLayoutMetrics {
   rows: number;
 }
 
-const MAX_PARTICLES = 160;
+const MAX_PARTICLES = 240;
+const MAX_SHOCKWAVES = 6;
 const MAX_FLOATING = 24;
 const MAX_RIPPLES = 8;
+
+const COMBO_CONFETTI_COLORS = ['#FBBF24', '#E3574B', '#22C55E', '#FB923C', '#FDE047', '#F472B6'];
 
 export class KitchenRenderer {
   private particles: Particle[] = Array.from({ length: MAX_PARTICLES }, () => ({
@@ -85,8 +101,22 @@ export class KitchenRenderer {
     maxLife: 1,
     size: 4,
     color: '#fff',
+    shape: 'circle',
+    rot: 0,
+    vrot: 0,
   }));
   private particleCursor = 0;
+
+  private shockwaves: ComboShockwave[] = Array.from({ length: MAX_SHOCKWAVES }, () => ({
+    active: false,
+    x: 0,
+    y: 0,
+    life: 0,
+    maxLife: 0.65,
+    color: '#FBBF24',
+    maxRadius: 1.6,
+  }));
+  private shockwaveCursor = 0;
 
   private popups: FloatingPopup[] = Array.from({ length: MAX_FLOATING }, () => ({
     active: false,
@@ -302,6 +332,14 @@ export class KitchenRenderer {
             ev.particleColor ?? '#FBBF24',
           );
         }
+        if (ev.particleKind === 'combo_burst') {
+          this.spawnShockwave(
+            ev.particleX,
+            ev.particleY,
+            ev.particleColor ?? '#F59E0B',
+            1.35 + Math.min(1.0, ((ev.comboLevel ?? 3) - 3) * 0.25),
+          );
+        }
       }
       if (ev.floatingText && ev.floatingX !== undefined && ev.floatingY !== undefined) {
         this.spawnPopup(
@@ -314,9 +352,22 @@ export class KitchenRenderer {
     }
   }
 
+  private spawnShockwave(x: number, y: number, color: string, maxRadius: number): void {
+    const sw = this.shockwaves[this.shockwaveCursor];
+    this.shockwaveCursor = (this.shockwaveCursor + 1) % MAX_SHOCKWAVES;
+    sw.active = true;
+    sw.x = x;
+    sw.y = y;
+    sw.maxLife = 0.62;
+    sw.life = sw.maxLife;
+    sw.color = color;
+    sw.maxRadius = maxRadius;
+  }
+
   public hasActiveVisuals(): boolean {
     if (this.shakeTrauma > 0.005) return true;
     for (let i = 0; i < MAX_PARTICLES; i++) if (this.particles[i].active) return true;
+    for (let i = 0; i < MAX_SHOCKWAVES; i++) if (this.shockwaves[i].active) return true;
     for (let i = 0; i < MAX_FLOATING; i++) if (this.popups[i].active) return true;
     for (let i = 0; i < MAX_RIPPLES; i++) if (this.ripples[i].active) return true;
     return false;
@@ -335,7 +386,15 @@ export class KitchenRenderer {
       }
       p.x += p.vx * dt;
       p.y += p.vy * dt;
-      p.vy += 0.45 * dt;
+      p.vy += (p.shape === 'confetti' ? 0.9 : 0.45) * dt;
+      p.rot += p.vrot * dt;
+    }
+
+    for (let i = 0; i < MAX_SHOCKWAVES; i++) {
+      const sw = this.shockwaves[i];
+      if (!sw.active) continue;
+      sw.life -= dt;
+      if (sw.life <= 0) sw.active = false;
     }
 
     for (let i = 0; i < MAX_FLOATING; i++) {
@@ -373,6 +432,19 @@ export class KitchenRenderer {
             }
           }
         }
+        // Golden streak sparkles trailing behind Chef Pip on high combos (3x+)
+        if (sim.combo >= 3) {
+          const moving = Math.hypot(sim.chef.vx, sim.chef.vy) > 0.35;
+          if (moving || sim.combo >= 5) {
+            const trailColor = sim.combo >= 5 ? '#FDE047' : '#FB923C';
+            this.spawnParticle(
+              sim.chef.x + (Math.random() - 0.5) * 0.36,
+              sim.chef.y + (Math.random() - 0.5) * 0.28,
+              'sparkle',
+              trailColor,
+            );
+          }
+        }
       }
     }
   }
@@ -387,8 +459,10 @@ export class KitchenRenderer {
     this.particleCursor = (this.particleCursor + 1) % MAX_PARTICLES;
 
     const angle = Math.random() * Math.PI * 2;
-    const speed =
-      kind === 'serve'
+    const isComboBurst = kind === 'combo_burst';
+    const speed = isComboBurst
+      ? 1.9 + Math.random() * 3.1
+      : kind === 'serve'
         ? 1.4 + Math.random() * 2.5
         : kind === 'steam' || kind === 'smoke'
           ? 0.25 + Math.random() * 0.4
@@ -401,11 +475,32 @@ export class KitchenRenderer {
     p.vy =
       kind === 'steam' || kind === 'smoke'
         ? -0.7 - Math.random() * 0.65
-        : Math.sin(angle) * speed - (kind === 'serve' ? 0.8 : 0.35);
-    p.maxLife = kind === 'steam' || kind === 'smoke' ? 0.65 : kind === 'serve' ? 0.75 : 0.44;
+        : Math.sin(angle) * speed - (isComboBurst ? 1.15 : kind === 'serve' ? 0.8 : 0.35);
+    p.maxLife = isComboBurst
+      ? 0.85 + Math.random() * 0.35
+      : kind === 'steam' || kind === 'smoke'
+        ? 0.65
+        : kind === 'serve'
+          ? 0.75
+          : 0.44;
     p.life = p.maxLife;
-    p.size = kind === 'serve' ? 5.2 : kind === 'smoke' ? 6.5 : 4;
-    p.color = color;
+    p.size = isComboBurst ? 6.2 : kind === 'serve' ? 5.2 : kind === 'smoke' ? 6.5 : 4;
+    if (isComboBurst) {
+      p.shape = Math.random() < 0.48 ? 'star' : 'confetti';
+      p.color = COMBO_CONFETTI_COLORS[Math.floor(Math.random() * COMBO_CONFETTI_COLORS.length)];
+      p.rot = Math.random() * Math.PI * 2;
+      p.vrot = (Math.random() - 0.5) * 11;
+    } else if (kind === 'sparkle' || (kind === 'serve' && Math.random() < 0.35)) {
+      p.shape = 'star';
+      p.color = color;
+      p.rot = Math.random() * Math.PI;
+      p.vrot = (Math.random() - 0.5) * 5;
+    } else {
+      p.shape = 'circle';
+      p.color = color;
+      p.rot = 0;
+      p.vrot = 0;
+    }
   }
 
   private spawnPopup(x: number, y: number, text: string, color: string): void {
@@ -2413,17 +2508,57 @@ export class KitchenRenderer {
   }
 
   private drawParticles(ctx: CanvasRenderingContext2D, T: number, portrait: boolean): void {
+    // Expanding golden/coral shockwaves on high combos
+    for (let i = 0; i < MAX_SHOCKWAVES; i++) {
+      const sw = this.shockwaves[i];
+      if (!sw.active) continue;
+      const progress = 1 - sw.life / sw.maxLife;
+      const alpha = Math.max(0, 1 - progress);
+      const sp = this.toScreenGrid(sw.x, sw.y, portrait);
+      const radius = (0.28 + progress * sw.maxRadius) * T;
+      ctx.save();
+      ctx.globalAlpha = alpha * 0.72;
+      ctx.strokeStyle = sw.color;
+      ctx.lineWidth = Math.max(2, (1 - progress) * 7);
+      ctx.beginPath();
+      ctx.arc(sp.x * T, sp.y * T, radius, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+
     for (let i = 0; i < MAX_PARTICLES; i++) {
       const p = this.particles[i];
       if (!p.active) continue;
       const alpha = Math.max(0, p.life / p.maxLife);
       const sp = this.toScreenGrid(p.x, p.y, portrait);
+      const px = sp.x * T;
+      const py = sp.y * T;
+      const sz = p.size * (0.55 + alpha * 0.55);
+
       ctx.save();
       ctx.globalAlpha = alpha;
+      ctx.translate(px, py);
       ctx.fillStyle = p.color;
-      ctx.beginPath();
-      ctx.arc(sp.x * T, sp.y * T, p.size * (0.5 + alpha * 0.5), 0, Math.PI * 2);
-      ctx.fill();
+
+      if (p.shape === 'star') {
+        ctx.rotate(p.rot);
+        ctx.beginPath();
+        for (let k = 0; k < 8; k++) {
+          const rad = k % 2 === 0 ? sz * 1.25 : sz * 0.45;
+          const a = (k * Math.PI) / 4;
+          if (k === 0) ctx.moveTo(Math.cos(a) * rad, Math.sin(a) * rad);
+          else ctx.lineTo(Math.cos(a) * rad, Math.sin(a) * rad);
+        }
+        ctx.closePath();
+        ctx.fill();
+      } else if (p.shape === 'confetti') {
+        ctx.rotate(p.rot);
+        ctx.fillRect(-sz * 0.9, -sz * 0.42, sz * 1.8, sz * 0.84);
+      } else {
+        ctx.beginPath();
+        ctx.arc(0, 0, sz, 0, Math.PI * 2);
+        ctx.fill();
+      }
       ctx.restore();
     }
   }

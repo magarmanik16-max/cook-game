@@ -1,11 +1,20 @@
 import type {
   AchievementId,
+  DailyMissionId,
   DishId,
   KitchenThemeId,
   PersistentProgress,
   UpgradeKey,
   UpgradeLevels,
 } from './types';
+import {
+  applyMatchToDailyMissions,
+  createDailyMissionState,
+  DAILY_ALL_CLEAR_BONUS,
+  DAILY_MISSION_CATALOG,
+  ensureCurrentDailyMissions,
+  getTodayDateKey,
+} from './missions';
 import { RECIPE_LIST } from './recipes';
 
 const STORAGE_KEY = 'copper_pan_progress_v2';
@@ -167,7 +176,10 @@ export const ACHIEVEMENTS: AchievementDefinition[] = [
   },
 ];
 
-export function createDefaultProgress(bestScore = 0): PersistentProgress {
+export function createDefaultProgress(
+  bestScore = 0,
+  dateKey: string = getTodayDateKey(),
+): PersistentProgress {
   return {
     coins: 0,
     day: 1,
@@ -185,6 +197,7 @@ export function createDefaultProgress(bestScore = 0): PersistentProgress {
     selectedTheme: 'copper',
     unlockedThemes: ['copper'],
     unlockedAchievements: [],
+    dailyMissions: createDailyMissionState(dateKey),
   };
 }
 
@@ -231,6 +244,7 @@ export function loadProgress(): PersistentProgress {
         unlockedAchievements: Array.isArray(parsed.unlockedAchievements)
           ? parsed.unlockedAchievements
           : [],
+        dailyMissions: ensureCurrentDailyMissions(parsed.dailyMissions),
       };
     }
 
@@ -332,6 +346,57 @@ export function getDailySpecialForDay(day: number): DishId {
   return pool[(Math.max(1, day) - 1) % pool.length].id;
 }
 
+export function claimDailyMission(
+  progress: PersistentProgress,
+  missionId: DailyMissionId,
+  dateKey: string = getTodayDateKey(),
+): { next: PersistentProgress; claimed: boolean; reward: number } {
+  const current = ensureCurrentDailyMissions(progress.dailyMissions, dateKey);
+  const target = current.missions.find((m) => m.id === missionId);
+  if (!target || !target.completed || target.claimed) {
+    return { next: progress, claimed: false, reward: 0 };
+  }
+  const def = DAILY_MISSION_CATALOG[missionId];
+  const reward = def ? def.coinReward : 0;
+  return {
+    claimed: true,
+    reward,
+    next: {
+      ...progress,
+      coins: progress.coins + reward,
+      dailyMissions: {
+        ...current,
+        missions: current.missions.map((m) =>
+          m.id === missionId ? { ...m, claimed: true } : m,
+        ),
+      },
+    },
+  };
+}
+
+export function claimDailyAllClearBonus(
+  progress: PersistentProgress,
+  dateKey: string = getTodayDateKey(),
+): { next: PersistentProgress; claimed: boolean; reward: number } {
+  const current = ensureCurrentDailyMissions(progress.dailyMissions, dateKey);
+  const allCompleted = current.missions.length === 3 && current.missions.every((m) => m.completed);
+  if (!allCompleted || current.allClearClaimed) {
+    return { next: progress, claimed: false, reward: 0 };
+  }
+  return {
+    claimed: true,
+    reward: DAILY_ALL_CLEAR_BONUS,
+    next: {
+      ...progress,
+      coins: progress.coins + DAILY_ALL_CLEAR_BONUS,
+      dailyMissions: {
+        ...current,
+        allClearClaimed: true,
+      },
+    },
+  };
+}
+
 export function finalizeShiftProgress(
   progress: PersistentProgress,
   summary: {
@@ -340,9 +405,17 @@ export function finalizeShiftProgress(
     ordersServed: number;
     perfectDishes: number;
     maxCombo: number;
+    burntCount?: number;
+    servedByDish?: Partial<Record<DishId, number>>;
+    vipOrFoodieServed?: number;
     wonChallenge?: boolean;
+    dateKey?: string;
   },
-): { nextProgress: PersistentProgress; newlyUnlocked: AchievementId[] } {
+): {
+  nextProgress: PersistentProgress;
+  newlyUnlocked: AchievementId[];
+  newlyCompletedMissions: DailyMissionId[];
+} {
   const nextChallengeWins = summary.wonChallenge
     ? progress.challengeWins + 1
     : progress.challengeWins;
@@ -368,8 +441,24 @@ export function finalizeShiftProgress(
   checkUnlock('day_three', nextChallengeWins >= 1);
   checkUnlock('fifty_plates', nextTotalServed >= 50);
 
+  const { nextState: nextDailyMissions, newlyCompleted: newlyCompletedMissions } =
+    applyMatchToDailyMissions(
+      progress.dailyMissions,
+      {
+        ordersServed: summary.ordersServed,
+        perfectDishes: summary.perfectDishes,
+        burntCount: summary.burntCount ?? 0,
+        maxCombo: summary.maxCombo,
+        servedByDish: summary.servedByDish ?? {},
+        vipOrFoodieServed: summary.vipOrFoodieServed ?? 0,
+        wonChallenge: summary.wonChallenge,
+      },
+      summary.dateKey,
+    );
+
   return {
     newlyUnlocked,
+    newlyCompletedMissions,
     nextProgress: {
       ...progress,
       day: progress.day + 1,
@@ -379,6 +468,7 @@ export function finalizeShiftProgress(
       bestServed: nextBestServed,
       coins: progress.coins + Math.round(summary.coinsEarned) + bonusCoins,
       unlockedAchievements: Array.from(earnedSet),
+      dailyMissions: nextDailyMissions,
     },
   };
 }

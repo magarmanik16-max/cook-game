@@ -19,6 +19,31 @@ export type AchievementId =
   | 'day_three'
   | 'fifty_plates';
 
+export type DailyMissionId =
+  | 'serve_salads'
+  | 'serve_toasts'
+  | 'serve_grill'
+  | 'no_burn_match'
+  | 'serve_perfect'
+  | 'reach_combo'
+  | 'serve_customers'
+  | 'serve_vip'
+  | 'win_challenge';
+
+export interface DailyMissionProgress {
+  id: DailyMissionId;
+  progress: number;
+  target: number;
+  completed: boolean;
+  claimed: boolean;
+}
+
+export interface DailyMissionState {
+  dateKey: string;
+  missions: DailyMissionProgress[];
+  allClearClaimed: boolean;
+}
+
 export interface PersistentProgress {
   coins: number;
   day: number;
@@ -30,6 +55,7 @@ export interface PersistentProgress {
   selectedTheme: KitchenThemeId;
   unlockedThemes: KitchenThemeId[];
   unlockedAchievements: AchievementId[];
+  dailyMissions: DailyMissionState;
 }
 
 export type IngredientBase =
@@ -238,11 +264,12 @@ export type SoundCue =
 
 export interface SimEvent {
   sound?: SoundCue;
-  particleKind?: 'chop' | 'steam' | 'sparkle' | 'smoke' | 'dash' | 'serve';
+  particleKind?: 'chop' | 'steam' | 'sparkle' | 'smoke' | 'dash' | 'serve' | 'combo_burst';
   particleX?: number;
   particleY?: number;
   particleColor?: string;
   particleCount?: number;
+  comboLevel?: number;
   hitstop?: number;
   shakeTrauma?: number;
   floatingText?: string;
@@ -268,6 +295,7 @@ export interface RunStatsSnapshot {
   botOrdersServed: number;
   botScore: number;
   perfectDishes: number;
+  burntCount: number;
   maxCombo: number;
   elapsedSeconds: number;
   wave: number;
@@ -275,6 +303,7 @@ export interface RunStatsSnapshot {
   mode: GameMode;
   dailySpecialDishId: DishId;
   newlyUnlockedAchievements: AchievementId[];
+  newlyCompletedMissions: DailyMissionId[];
 }
 
 export interface KitchenSimulation {
@@ -292,6 +321,8 @@ export interface KitchenSimulation {
   ordersServed: number;
   perfectDishes: number;
   burntCount: number;
+  servedByDish: Partial<Record<DishId, number>>;
+  vipOrFoodieServed: number;
   wave: number;
   elapsedSeconds: number;
   spawnTimer: number;

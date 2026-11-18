@@ -1,0 +1,15 @@
+{
+  "appId": "com.copperpan.bistro",
+  "appName": "Copper Pan",
+  "webDir": "dist",
+  "backgroundColor": "#FDF4EB",
+  "android": {
+    "backgroundColor": "#FDF4EB",
+    "allowMixedContent": false,
+    "captureInput": true,
+    "webContentsDebuggingEnabled": false
+  },
+  "server": {
+    "androidScheme": "https"
+  }
+}

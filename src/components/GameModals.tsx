@@ -1,6 +1,8 @@
 import React from 'react';
+import { DAILY_MISSION_CATALOG } from '../game/missions';
 import { ACHIEVEMENTS } from '../game/progression';
 import type { GamePhase, RunStatsSnapshot } from '../game/types';
+import type { ShopTab } from './BistroShopModal';
 import { CoinSvg } from './DishIcons';
 
 interface GameModalsProps {
@@ -8,7 +10,7 @@ interface GameModalsProps {
   stats: RunStatsSnapshot;
   onResume: () => void;
   onRestart: () => void;
-  onOpenShop: () => void;
+  onOpenShop: (tab?: ShopTab) => void;
   onReturnTitle: () => void;
 }
 
@@ -141,6 +143,37 @@ export function GameModals({
           </div>
         </div>
 
+        {/* Newly Completed Daily Missions */}
+        {!isPaused && stats.newlyCompletedMissions.length > 0 && (
+          <div className="clay-card-sm bg-[#FFF6E5] ring-1 ring-[#F59E0B] px-4 py-3">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-bold text-[#B45309]">Daily Missions Complete!</span>
+              <button
+                type="button"
+                onClick={() => onOpenShop('missions')}
+                className="text-xs font-bold text-[#15803D] underline underline-offset-2 cursor-pointer"
+              >
+                Claim Coins
+              </button>
+            </div>
+            <div className="mt-1 space-y-0.5">
+              {stats.newlyCompletedMissions.map((id) => {
+                const def = DAILY_MISSION_CATALOG[id];
+                if (!def) return null;
+                return (
+                  <div
+                    key={id}
+                    className="text-xs font-semibold text-[#3D2921] flex items-center justify-between"
+                  >
+                    <span>{def.title}</span>
+                    <span className="font-mono-num text-[#B45309]">+{def.coinReward}c</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         {/* Newly Unlocked Milestones */}
         {stats.newlyUnlockedAchievements.length > 0 && (
           <div className="clay-card-sm bg-[#E3F6EA] px-4 py-3">
@@ -199,10 +232,10 @@ export function GameModals({
           ) : (
             <button
               type="button"
-              onClick={onOpenShop}
+              onClick={() => onOpenShop(stats.newlyCompletedMissions.length > 0 ? 'missions' : 'upgrades')}
               className="clay-btn-soft px-4 py-2.5 rounded-2xl bg-[#FFFBF7] hover:bg-[#FFF3E8] text-[#3D2921] font-bold text-sm whitespace-nowrap shrink-0 cursor-pointer"
             >
-              Upgrades &amp; Style
+              {stats.newlyCompletedMissions.length > 0 ? 'Claim Rewards' : 'Upgrades & Style'}
             </button>
           )}
 

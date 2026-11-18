@@ -6,6 +6,8 @@ import { MobileControls } from './components/MobileControls';
 import { TitleScreen } from './components/TitleScreen';
 import { kitchenAudio } from './game/audio';
 import {
+  claimDailyAllClearBonus,
+  claimDailyMission,
   finalizeShiftProgress,
   loadProgress,
   purchaseUpgrade,
@@ -15,6 +17,7 @@ import {
 import { ITEM_LABELS, RECIPES } from './game/recipes';
 import { KitchenRenderer } from './game/renderer';
 import {
+  COMBO_WINDOW,
   createInitialSimulation,
   createStatsSnapshot,
   getStationInteractionHint,
@@ -22,6 +25,7 @@ import {
 } from './game/rules';
 import { useViewportProfile } from './game/viewport';
 import type {
+  DailyMissionId,
   GameMode,
   GamePhase,
   KitchenSimulation,
@@ -52,6 +56,8 @@ function extractHudState(sim: KitchenSimulation): HudState {
     score: sim.score,
     coinsEarned: sim.coinsEarned,
     combo: sim.combo,
+    comboTimer: sim.comboTimer,
+    comboMaxWindow: COMBO_WINDOW,
     ordersServed: sim.ordersServed,
     botOrdersServed: sim.bot?.ordersServed ?? 0,
     botScore: sim.bot?.score ?? 0,
@@ -258,6 +264,24 @@ export default function App() {
     rendererRef.current.setTheme(next.selectedTheme);
     kitchenAudio.play('upgrade');
     wakeLoopRef.current?.();
+  }, []);
+
+  const handleClaimMission = useCallback((missionId: DailyMissionId) => {
+    const { next, claimed } = claimDailyMission(progressRef.current, missionId);
+    if (!claimed) return;
+    saveProgress(next);
+    progressRef.current = next;
+    setProgress(next);
+    kitchenAudio.play('coin');
+  }, []);
+
+  const handleClaimAllClear = useCallback(() => {
+    const { next, claimed } = claimDailyAllClearBonus(progressRef.current);
+    if (!claimed) return;
+    saveProgress(next);
+    progressRef.current = next;
+    setProgress(next);
+    kitchenAudio.play('achievement');
   }, []);
 
   const handleMobileDash = useCallback(() => {
@@ -468,24 +492,30 @@ export default function App() {
 
         if (sim.outcome !== 'none') {
           kitchenAudio.setSizzling(false);
-          const { nextProgress, newlyUnlocked } = finalizeShiftProgress(progressRef.current, {
-            score: sim.score,
-            coinsEarned: sim.coinsEarned,
-            ordersServed: sim.ordersServed,
-            perfectDishes: sim.perfectDishes,
-            maxCombo: sim.maxCombo,
-            wonChallenge: sim.mode === 'challenge' && sim.outcome === 'victory',
-          });
+          const { nextProgress, newlyUnlocked, newlyCompletedMissions } = finalizeShiftProgress(
+            progressRef.current,
+            {
+              score: sim.score,
+              coinsEarned: sim.coinsEarned,
+              ordersServed: sim.ordersServed,
+              perfectDishes: sim.perfectDishes,
+              maxCombo: sim.maxCombo,
+              burntCount: sim.burntCount,
+              servedByDish: sim.servedByDish,
+              vipOrFoodieServed: sim.vipOrFoodieServed,
+              wonChallenge: sim.mode === 'challenge' && sim.outcome === 'victory',
+            },
+          );
           saveProgress(nextProgress);
           progressRef.current = nextProgress;
           setProgress(nextProgress);
           sim.bestScore = nextProgress.bestScore;
 
-          if (newlyUnlocked.length > 0) {
+          if (newlyUnlocked.length > 0 || newlyCompletedMissions.length > 0) {
             kitchenAudio.play('achievement');
           }
 
-          const snap = createStatsSnapshot(sim, newlyUnlocked);
+          const snap = createStatsSnapshot(sim, newlyUnlocked, newlyCompletedMissions);
           setEndStats(snap);
           setHud(extractHudState(sim));
           phaseRef.current = 'gameover';
@@ -659,13 +689,15 @@ export default function App() {
         onReturnTitle={handleReturnTitle}
       />
 
-      {/* Persistent Upgrades, Themes & Recipe/Milestone Book */}
+      {/* Persistent Missions, Upgrades, Themes & Recipe/Milestone Book */}
       <BistroShopModal
         open={shopOpen}
         initialTab={shopTab}
         progress={progress}
         onBuyUpgrade={handleBuyUpgrade}
         onSelectTheme={handleSelectTheme}
+        onClaimMission={handleClaimMission}
+        onClaimAllClear={handleClaimAllClear}
         onClose={handleCloseShop}
       />
     </div>
