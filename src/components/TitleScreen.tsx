@@ -129,6 +129,16 @@ export function TitleScreen({
                   : 'bg-[#FFFBF7] text-[#6E5245]'
               }`}
             >
+              {loginStatus.canClaimToday && (
+                <span
+                  data-testid="daily-reward-dot"
+                  aria-hidden="true"
+                  className="absolute -top-1 -right-1 flex h-3 w-3 pointer-events-none"
+                >
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#E3574B] opacity-75" />
+                  <span className="relative inline-flex rounded-full h-3 w-3 bg-[#E3574B] ring-2 ring-[#FFFBF7]" />
+                </span>
+              )}
               <svg viewBox="0 0 24 24" className="w-3.5 h-3.5 text-[#D97706] shrink-0" aria-hidden="true">
                 <rect x="4" y="9" width="16" height="11" rx="2" fill="none" stroke="currentColor" strokeWidth="2.1" />
                 <path d="M12 9 V20 M3 9 H21 M12 9 C10 5, 7 5, 7.5 7.5 C8 9, 12 9, 12 9 Z M12 9 C14 5, 17 5, 16.5 7.5 C16 9, 12 9, 12 9 Z" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
@@ -597,8 +607,18 @@ export function TitleScreen({
             <button
               type="button"
               onClick={() => onOpenShop('missions')}
-              className="clay-btn-soft px-4 py-3.5 text-sm sm:text-base rounded-2xl bg-[#FFF6E5] hover:bg-[#FFEDD0] text-[#3D2921] font-bold whitespace-nowrap shrink-0 cursor-pointer inline-flex items-center gap-2"
+              className="clay-btn-soft relative px-4 py-3.5 text-sm sm:text-base rounded-2xl bg-[#FFF6E5] hover:bg-[#FFEDD0] text-[#3D2921] font-bold whitespace-nowrap shrink-0 cursor-pointer inline-flex items-center gap-2"
             >
+              {unclaimedMissions > 0 && (
+                <span
+                  data-testid="daily-missions-dot"
+                  aria-hidden="true"
+                  className="absolute -top-1 -right-1 flex h-3 w-3 pointer-events-none"
+                >
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#16A34A] opacity-75" />
+                  <span className="relative inline-flex rounded-full h-3 w-3 bg-[#16A34A] ring-2 ring-[#FFFBF7]" />
+                </span>
+              )}
               <span>Daily Missions</span>
               <span
                 className={`font-mono-num text-xs font-bold tabular-nums ${
@@ -613,12 +633,22 @@ export function TitleScreen({
               type="button"
               data-testid="open-login-rewards-btn"
               onClick={onOpenLoginRewards}
-              className={`clay-btn-soft px-4 py-3.5 text-sm sm:text-base rounded-2xl font-bold whitespace-nowrap shrink-0 cursor-pointer inline-flex items-center gap-2 ${
+              className={`clay-btn-soft relative px-4 py-3.5 text-sm sm:text-base rounded-2xl font-bold whitespace-nowrap shrink-0 cursor-pointer inline-flex items-center gap-2 ${
                 loginStatus.canClaimToday
                   ? 'bg-[#FFF3CC] hover:bg-[#FFE8A3] ring-1 ring-[#F59E0B] text-[#78350F]'
                   : 'bg-[#FFFBF7] hover:bg-[#FFF3E8] text-[#3D2921]'
               }`}
             >
+              {loginStatus.canClaimToday && (
+                <span
+                  data-testid="daily-reward-dot"
+                  aria-hidden="true"
+                  className="absolute -top-1 -right-1 flex h-3.5 w-3.5 pointer-events-none"
+                >
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#E3574B] opacity-75" />
+                  <span className="relative inline-flex rounded-full h-3.5 w-3.5 bg-[#E3574B] ring-2 ring-[#FFFBF7]" />
+                </span>
+              )}
               <svg viewBox="0 0 24 24" className="w-4 h-4 text-[#D97706] shrink-0" aria-hidden="true">
                 <rect x="4" y="9" width="16" height="11" rx="2" fill="none" stroke="currentColor" strokeWidth="2.1" />
                 <path d="M12 9 V20 M3 9 H21 M12 9 C10 5, 7 5, 7.5 7.5 C8 9, 12 9, 12 9 Z M12 9 C14 5, 17 5, 16.5 7.5 C16 9, 12 9, 12 9 Z" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
